@@ -1,0 +1,22 @@
+---
+- name: Report Docker status on target host
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Get Docker host info
+      community.docker.docker_host_info:
+        containers: true
+        images: true
+      register: docker_info
+
+    - name: Show Docker version
+      ansible.builtin.debug:
+        msg: "Docker version: {{ docker_info.host_info.ServerVersion }}"
+
+    - name: Show running containers
+      ansible.builtin.debug:
+        msg: "Running containers: {{ docker_info.containers | map(attribute='Names') | list }}"
+
+    - name: Show container count
+      ansible.builtin.debug:
+        msg: "Total containers: {{ docker_info.containers | length }}, Total images: {{ docker_info.images | length }}"
