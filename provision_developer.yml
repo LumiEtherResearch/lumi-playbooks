@@ -1,0 +1,75 @@
+---
+- name: Provision developer accounts with pinned VS Code Server
+  hosts: all
+  become: true
+  vars_files:
+    - vars/approved_vscode.yml
+  vars:
+    developers: []
+
+  tasks:
+    - name: Create developer Linux accounts
+      ansible.builtin.user:
+        name: "{{ item.username }}"
+        shell: /bin/bash
+        create_home: true
+        state: present
+      loop: "{{ developers }}"
+      loop_control:
+        label: "{{ item.username }}"
+
+    - name: Ensure .ssh directory exists
+      ansible.builtin.file:
+        path: "/home/{{ item.username }}/.ssh"
+        state: directory
+        owner: "{{ item.username }}"
+        group: "{{ item.username }}"
+        mode: "0700"
+      loop: "{{ developers }}"
+      loop_control:
+        label: "{{ item.username }}"
+      when: item.ssh_public_key is defined
+
+    - name: Install developer's SSH public key
+      ansible.builtin.authorized_key:
+        user: "{{ item.username }}"
+        key: "{{ item.ssh_public_key }}"
+        state: present
+      loop: "{{ developers }}"
+      loop_control:
+        label: "{{ item.username }}"
+      when: item.ssh_public_key is defined
+
+    - name: Create per-developer Git working tree directory
+      ansible.builtin.file:
+        path: "/home/{{ item.username }}/workspace"
+        state: directory
+        owner: "{{ item.username }}"
+        group: "{{ item.username }}"
+        mode: "0750"
+      loop: "{{ developers }}"
+      loop_control:
+        label: "{{ item.username }}"
+
+    - name: Check if approved VS Code Server build already staged
+      ansible.builtin.stat:
+        path: "/home/{{ item.username }}/.vscode-server/bin/{{ approved_vscode_commit }}/bin/code-server"
+      register: server_staged
+      loop: "{{ developers }}"
+      loop_control:
+        label: "{{ item.username }}"
+      become_user: "{{ item.username }}"
+
+    - name: Download and stage approved VS Code Server build per developer
+      ansible.builtin.shell: |
+        set -e
+        mkdir -p "$HOME/.vscode-server/bin/{{ approved_vscode_commit }}"
+        curl -fsSL "https://update.code.visualstudio.com/commit:{{ approved_vscode_commit }}/server-linux-x64/stable" \
+          | tar -xz -C "$HOME/.vscode-server/bin/{{ approved_vscode_commit }}" --strip-components=1
+      args:
+        executable: /bin/bash
+      become_user: "{{ item.item.username }}"
+      loop: "{{ server_staged.results }}"
+      loop_control:
+        label: "{{ item.item.username }}"
+      when: not item.stat.exists

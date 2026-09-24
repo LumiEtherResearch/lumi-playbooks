@@ -1,0 +1,28 @@
+---
+- name: Pin the approved VS Code Server build
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Fetch latest stable commit list
+      ansible.builtin.uri:
+        url: https://update.code.visualstudio.com/api/commits/stable/linux-x64
+        return_content: true
+      register: commits_response
+
+    - name: Extract latest commit sha
+      ansible.builtin.set_fact:
+        latest_commit: "{{ (commits_response.content | from_json)[0] }}"
+
+    - name: Write approved version to vars file
+      ansible.builtin.copy:
+        dest: "{{ playbook_dir }}/vars/approved_vscode.yml"
+        content: |
+          ---
+          # Pinned by pin_vscode_version.yml — bump deliberately, not automatically.
+          approved_vscode_commit: "{{ latest_commit }}"
+          pinned_on: "{{ ansible_date_time.iso8601 | default(lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ')) }}"
+
+    - name: Show pinned commit
+      ansible.builtin.debug:
+        msg: "Pinned VS Code Server commit: {{ latest_commit }}"
