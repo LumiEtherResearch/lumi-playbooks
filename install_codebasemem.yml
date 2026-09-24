@@ -1,0 +1,39 @@
+---
+- name: Install codebase-memory-mcp (CBM) for the connecting user
+  hosts: all
+  become: false
+  gather_facts: true
+
+  tasks:
+    - name: Check if codebase-memory-mcp is already installed
+      ansible.builtin.stat:
+        path: "{{ ansible_env.HOME }}/.local/bin/codebase-memory-mcp"
+      register: cbm_check
+
+    - name: Download official install.sh
+      ansible.builtin.get_url:
+        url: https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh
+        dest: /tmp/cbm-install.sh
+        mode: "0755"
+      when: not cbm_check.stat.exists
+
+    - name: Run official installer (verifies checksum internally)
+      ansible.builtin.command:
+        cmd: /tmp/cbm-install.sh
+      when: not cbm_check.stat.exists
+
+    - name: Clean up installer script
+      ansible.builtin.file:
+        path: /tmp/cbm-install.sh
+        state: absent
+      when: not cbm_check.stat.exists
+
+    - name: Verify installation
+      ansible.builtin.command:
+        cmd: "{{ ansible_env.HOME }}/.local/bin/codebase-memory-mcp --version"
+      register: cbm_version
+      changed_when: false
+
+    - name: Show installed version
+      ansible.builtin.debug:
+        msg: "Installed: {{ cbm_version.stdout }}"
