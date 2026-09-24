@@ -28,7 +28,7 @@
     - name: Download and extract SPIRE release
       ansible.builtin.shell: |
         set -e
-        curl -fsSL "https://github.com/spiffe/spire/releases/download/v{{ spire_version }}/spire-{{ spire_version }}-linux-x86_64-glibc.tar.gz" -o /tmp/spire.tar.gz
+        curl -fsSL "https://github.com/spiffe/spire/releases/download/v{{ spire_version }}/spire-{{ spire_version }}-linux-amd64-musl.tar.gz" -o /tmp/spire.tar.gz
         tar -xzf /tmp/spire.tar.gz -C /tmp
         cp /tmp/spire-{{ spire_version }}/bin/spire-agent {{ spire_agent_dir }}/bin/spire-agent
         chmod +x {{ spire_agent_dir }}/bin/spire-agent
