@@ -4,6 +4,7 @@
   become: true
   vars:
     vibe_install_dir: /opt/mistral-vibe
+    uv_python_install_dir: /opt/uv-python
 
   tasks:
     - name: Ensure python3 and venv support are installed
@@ -27,10 +28,18 @@
         executable: /bin/bash
       when: not uv_check.stat.exists
 
+    - name: Ensure shared uv python install dir exists and is world-readable
+      ansible.builtin.file:
+        path: "{{ uv_python_install_dir }}"
+        state: directory
+        mode: "0755"
+
     - name: Create shared venv for Vibe
       ansible.builtin.command:
         cmd: "/usr/local/bin/uv venv {{ vibe_install_dir }} --python 3.12"
         creates: "{{ vibe_install_dir }}/bin/python"
+      environment:
+        UV_PYTHON_INSTALL_DIR: "{{ uv_python_install_dir }}"
 
     - name: Install mistral-vibe into the shared venv
       ansible.builtin.command:
