@@ -1,0 +1,111 @@
+---
+- name: Install and configure SPIRE Agent
+  hosts: all
+  become: true
+  vars:
+    spire_version: "1.9.6"
+    spire_agent_dir: /opt/spire-agent
+    spire_socket_dir: /run/spire/agent-sockets
+    spire_join_token: ""   # passed at launch time via extra_vars
+
+  tasks:
+    - name: Ensure directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ spire_agent_dir }}/bin"
+        - "{{ spire_agent_dir }}/conf"
+        - "{{ spire_agent_dir }}/data"
+        - "{{ spire_socket_dir }}"
+
+    - name: Check if spire-agent binary already installed
+      ansible.builtin.stat:
+        path: "{{ spire_agent_dir }}/bin/spire-agent"
+      register: agent_binary
+
+    - name: Download and extract SPIRE release
+      ansible.builtin.shell: |
+        set -e
+        curl -fsSL "https://github.com/spiffe/spire/releases/download/v{{ spire_version }}/spire-{{ spire_version }}-linux-x86_64-glibc.tar.gz" -o /tmp/spire.tar.gz
+        tar -xzf /tmp/spire.tar.gz -C /tmp
+        cp /tmp/spire-{{ spire_version }}/bin/spire-agent {{ spire_agent_dir }}/bin/spire-agent
+        chmod +x {{ spire_agent_dir }}/bin/spire-agent
+        rm -rf /tmp/spire.tar.gz /tmp/spire-{{ spire_version }}
+      args:
+        executable: /bin/bash
+      when: not agent_binary.stat.exists
+
+    - name: Write agent config
+      ansible.builtin.copy:
+        dest: "{{ spire_agent_dir }}/conf/agent.conf"
+        content: |
+          agent {
+            data_dir = "{{ spire_agent_dir }}/data"
+            log_level = "INFO"
+            trust_domain = "lumietherresearch.com"
+            server_address = "127.0.0.1"
+            server_port = "8081"
+            socket_path = "{{ spire_socket_dir }}/api.sock"
+            insecure_bootstrap = true
+          }
+
+          plugins {
+            NodeAttestor "join_token" {
+              plugin_data {}
+            }
+            KeyManager "disk" {
+              plugin_data {
+                directory = "{{ spire_agent_dir }}/data"
+              }
+            }
+            WorkloadAttestor "unix" {
+              plugin_data {}
+            }
+          }
+
+    - name: Write start wrapper (uses join token only on first boot)
+      ansible.builtin.copy:
+        dest: "{{ spire_agent_dir }}/bin/start-agent.sh"
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          if [ -f "{{ spire_agent_dir }}/data/svid.der" ]; then
+            exec {{ spire_agent_dir }}/bin/spire-agent run -config {{ spire_agent_dir }}/conf/agent.conf
+          else
+            exec {{ spire_agent_dir }}/bin/spire-agent run -config {{ spire_agent_dir }}/conf/agent.conf -joinToken {{ spire_join_token }}
+          fi
+
+    - name: Write systemd unit for spire-agent
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/spire-agent.service
+        content: |
+          [Unit]
+          Description=SPIRE Agent
+          After=network.target
+
+          [Service]
+          ExecStart={{ spire_agent_dir }}/bin/start-agent.sh
+          Restart=on-failure
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Reload systemd and start spire-agent
+      ansible.builtin.systemd:
+        name: spire-agent
+        state: restarted
+        enabled: true
+        daemon_reload: true
+
+    - name: Wait for agent socket to appear
+      ansible.builtin.wait_for:
+        path: "{{ spire_socket_dir }}/api.sock"
+        timeout: 30
+
+    - name: Set socket permissions so other workloads can connect
+      ansible.builtin.file:
+        path: "{{ spire_socket_dir }}"
+        mode: "0755"
