@@ -10,6 +10,7 @@
         return_content: true
       register: commits_response
       delegate_to: localhost
+      become: false
 
     - name: Extract latest commit sha
       ansible.builtin.set_fact:
