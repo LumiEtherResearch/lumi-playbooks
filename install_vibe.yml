@@ -1,0 +1,54 @@
+---
+- name: Install Mistral Vibe (shared CLI installation)
+  hosts: all
+  become: true
+  vars:
+    vibe_install_dir: /opt/mistral-vibe
+
+  tasks:
+    - name: Ensure python3 and venv support are installed
+      ansible.builtin.apt:
+        name:
+          - python3
+          - python3-venv
+          - python3-pip
+        state: present
+        update_cache: true
+
+    - name: Check if uv is already installed
+      ansible.builtin.stat:
+        path: /usr/local/bin/uv
+      register: uv_check
+
+    - name: Install uv (Python package manager used to install Vibe)
+      ansible.builtin.shell: |
+        curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
+      args:
+        executable: /bin/bash
+      when: not uv_check.stat.exists
+
+    - name: Create shared venv for Vibe
+      ansible.builtin.command:
+        cmd: "/usr/local/bin/uv venv {{ vibe_install_dir }} --python 3.12"
+        creates: "{{ vibe_install_dir }}/bin/python"
+
+    - name: Install mistral-vibe into the shared venv
+      ansible.builtin.command:
+        cmd: "/usr/local/bin/uv pip install --python {{ vibe_install_dir }}/bin/python mistral-vibe"
+
+    - name: Symlink vibe onto PATH for all users
+      ansible.builtin.file:
+        src: "{{ vibe_install_dir }}/bin/vibe"
+        dest: /usr/local/bin/vibe
+        state: link
+        force: true
+
+    - name: Verify installation
+      ansible.builtin.command:
+        cmd: vibe --version
+      register: vibe_version
+      changed_when: false
+
+    - name: Show installed version
+      ansible.builtin.debug:
+        msg: "Installed: {{ vibe_version.stdout }}"
