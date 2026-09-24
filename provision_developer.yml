@@ -2,12 +2,19 @@
 - name: Provision developer accounts with pinned VS Code Server
   hosts: all
   become: true
-  vars_files:
-    - vars/approved_vscode.yml
   vars:
     developers: []
 
   tasks:
+    - name: Read pinned VS Code version from host
+      ansible.builtin.slurp:
+        src: /etc/lumi-infra/approved_vscode.yml
+      register: pinned_raw
+
+    - name: Parse pinned version
+      ansible.builtin.set_fact:
+        approved_vscode_commit: "{{ (pinned_raw.content | b64decode | from_yaml).approved_vscode_commit }}"
+
     - name: Create developer Linux accounts
       ansible.builtin.user:
         name: "{{ item.username }}"
