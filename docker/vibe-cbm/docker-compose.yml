@@ -1,0 +1,22 @@
+version: "3.8"
+
+services:
+  vibe-cbm:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vibe-cbm
+    restart: unless-stopped
+    environment:
+      - CBM_CACHE_DIR=/data/codebase-memory
+    volumes:
+      - workspaces:/workspaces
+      - cbm-data:/data/codebase-memory
+      - vibe-config:/root/.vibe
+    tty: true
+    stdin_open: true
+
+volumes:
+  workspaces:
+  cbm-data:
+  vibe-config:
