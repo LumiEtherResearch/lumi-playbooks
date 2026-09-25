@@ -21,7 +21,7 @@ RUN ln -sf /opt/mistral-vibe/bin/vibe /usr/local/bin/vibe
 
 # Install codebase-memory-mcp via its official installer (checksum-verified)
 RUN curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh \
-    | env HOME=/root bash --dir=/usr/local/bin
+    | env HOME=/root bash -s -- --dir=/usr/local/bin
 
 RUN mkdir -p /workspaces /data/codebase-memory
 
