@@ -9,6 +9,8 @@ services:
     restart: unless-stopped
     environment:
       - CBM_CACHE_DIR=/data/codebase-memory
+      # Codebase Memory refuses to index anything outside this root.
+      - CBM_ALLOWED_ROOT=/workspaces
     volumes:
       - workspaces:/workspaces
       - cbm-data:/data/codebase-memory

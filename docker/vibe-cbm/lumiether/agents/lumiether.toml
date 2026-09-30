@@ -1,0 +1,6 @@
+agent_type = "agent"
+display_name = "LumiEther"
+description = "LumiEther coding agent: Codebase Memory first, local deterministic loop, ast-grep for structural search."
+safety = "neutral"
+
+system_prompt_id = "lumiether-codebase-first"
