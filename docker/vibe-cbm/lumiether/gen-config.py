@@ -7,7 +7,9 @@ copied, not omitted). Output goes to stdout.
 """
 import json
 import os
+import re
 import sys
+import tomllib
 
 MODEL_FRAGMENT = "/etc/lumiether/vibe-model.toml"  # optional, mounted by compose
 
@@ -27,6 +29,18 @@ def main() -> None:
     out.append("# MANAGED by the vibe-cbm container entrypoint - regenerated on every start.")
     out.append("# Change /opt/lumiether/gen-config.py in the lumi-playbooks repo instead.")
     out.append('default_agent = "lumiether"')
+
+    # Optional model-provider fragment. Only `active_model` and [[providers]] /
+    # [[models]] tables are supported in it. A top-level key must precede every
+    # [table], so active_model is lifted out and emitted up here.
+    fragment = None
+    if os.path.isfile(MODEL_FRAGMENT):
+        with open(MODEL_FRAGMENT, encoding="utf-8") as fh:
+            fragment = fh.read()
+        m = re.search(r'^active_model\s*=\s*("[^"\n]*")[ \t]*$', fragment, re.M)
+        if m:
+            out.append(f"active_model = {m.group(1)}")
+            fragment = fragment.replace(m.group(0), "", 1)
     out.append("")
     out.append("[[mcp_servers]]")
     out.append('name = "codebase-memory-mcp"')
@@ -54,13 +68,19 @@ def main() -> None:
         out.append("]")
         out.append("")
 
-    if os.path.isfile(MODEL_FRAGMENT):
+    if fragment is not None:
         out.append("# --- model provider (from " + MODEL_FRAGMENT + ") ---")
-        with open(MODEL_FRAGMENT, encoding="utf-8") as fh:
-            out.append(fh.read().rstrip())
+        out.append(fragment.strip())
         out.append("")
 
-    sys.stdout.write("\n".join(out) + "\n")
+    text = "\n".join(out) + "\n"
+    try:
+        tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        # Non-zero exit: the entrypoint then keeps the previous config.toml.
+        print(f"ERROR: generated config is not valid TOML: {exc}", file=sys.stderr)
+        sys.exit(1)
+    sys.stdout.write(text)
 
 
 if __name__ == "__main__":

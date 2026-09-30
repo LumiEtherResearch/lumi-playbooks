@@ -11,12 +11,27 @@ services:
       - CBM_CACHE_DIR=/data/codebase-memory
       # Codebase Memory refuses to index anything outside this root.
       - CBM_ALLOWED_ROOT=/workspaces
+      # Bearer key for the host-side Mistral adapter. Set it as a stack
+      # environment variable in Portainer; it is never stored in Git.
+      - LUMI_ADAPTER_KEY=${LUMI_ADAPTER_KEY:?set LUMI_ADAPTER_KEY in the Portainer stack environment variables}
+      # No desktop keyring inside a container; do not let Vibe look for one.
+      - PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
     volumes:
       - workspaces:/workspaces
       - cbm-data:/data/codebase-memory
       - vibe-config:/root/.vibe
+      # Model provider fragment, created on the host (see enable-container-model.sh).
+      - /etc/lumiether/vibe-model.toml:/etc/lumiether/vibe-model.toml:ro
     tty: true
     stdin_open: true
+
+networks:
+  default:
+    ipam:
+      config:
+        # Pinned so the host adapter can listen on this network's gateway
+        # address (172.19.0.1) and that address never drifts.
+        - subnet: 172.19.0.0/16
 
 volumes:
   workspaces:
