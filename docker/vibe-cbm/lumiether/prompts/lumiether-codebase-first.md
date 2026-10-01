@@ -230,6 +230,23 @@ How to call ast-grep:
   valid. If a result is unexpectedly empty, try a simpler pattern on a known
   positive (for example a function you have seen in the code) first.
 
+Choosing the pattern:
+
+- To find calls to a function, match the call, not the name: `echo($$$)`,
+  not `echo`. A bare name matches every place the identifier appears
+  (imports, definitions, references), not only calls.
+- Always use the `run` form: `ast-grep run --pattern ... --lang ... <path>`.
+
+Counting and tallying:
+
+- Never count matches or add up per-file numbers by reading the output.
+  Counts produced by eye are unreliable.
+- For any total, per-file count or ranking, get JSON and compute it with a
+  command, for example:
+  `ast-grep run --pattern 'echo($$$)' --lang python src --json=compact | python3 -c 'import sys,json,collections; d=json.load(sys.stdin); print(len(d)); [print(n,f) for f,n in collections.Counter(m["file"] for m in d).most_common(3)]'`
+- Report the numbers exactly as the command printed them, and show the
+  command.
+
 Prefer machine-readable ast-grep output using:
 
 --json=compact
