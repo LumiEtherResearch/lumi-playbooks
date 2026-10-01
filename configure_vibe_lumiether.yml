@@ -1,0 +1,84 @@
+---
+# Give the host Mistral Vibe (VS Code extension and Plum) the LumiEther setup:
+# Codebase Memory as an MCP server, ast-grep, the `lumiether` agent and its prompt.
+#
+#   ansible-playbook configure_vibe_lumiether.yml --check     # dry run
+#   ansible-playbook configure_vibe_lumiether.yml
+#
+# Non-destructive: each user's config.toml is backed up once (config.toml.bak-lumiether),
+# only two marked blocks are added, and a user who already configures the same keys is
+# skipped and reported. Running sessions are not touched; new sessions pick it up.
+- name: LumiEther Vibe setup (Codebase Memory, ast-grep, lumiether agent)
+  hosts: "{{ target | default('all') }}"
+  become: true
+  vars:
+    lumiether_users: [abhi, anish, node-1]
+    vibe_venv: /opt/mistral-vibe
+    astgrep_version: "0.45.3"
+    install_cbm: true          # false = skip the Codebase Memory installer
+    configure_cbm: true        # false = skip `codebase-memory-mcp config set`
+    cbm_bin: /usr/local/bin/codebase-memory-mcp
+    lumiether_src: "{{ playbook_dir }}/docker/vibe-cbm/lumiether"
+    lumiether_lib: /opt/lumiether
+  tasks:
+    - name: Vibe venv must exist
+      ansible.builtin.stat:
+        path: "{{ vibe_venv }}/bin/python"
+      register: vibe_py
+      failed_when: not vibe_py.stat.exists
+
+    - name: git must be installed (Codebase Memory's watcher and detect_changes need it)
+      ansible.builtin.command: git --version
+      changed_when: false
+
+    - name: Find uv
+      ansible.builtin.shell: command -v uv
+      register: uv_path
+      changed_when: false
+      environment:
+        PATH: "/usr/local/bin:/usr/bin:/bin:/root/.local/bin"
+
+    - name: Install ast-grep into the Vibe venv (pinned)
+      ansible.builtin.command: >-
+        {{ uv_path.stdout }} pip install --python {{ vibe_venv }}/bin/python
+        ast-grep-cli=={{ astgrep_version }}
+      args:
+        creates: "{{ vibe_venv }}/bin/ast-grep"
+
+    # No `sg` link on purpose: it would shadow /usr/bin/sg from the shadow package.
+    - name: Put ast-grep on PATH
+      ansible.builtin.file:
+        src: "{{ vibe_venv }}/bin/ast-grep"
+        dest: /usr/local/bin/ast-grep
+        state: link
+      when: not ansible_check_mode
+
+    - name: Install Codebase Memory system-wide (official installer)
+      ansible.builtin.shell: >-
+        curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh
+        | env HOME=/root bash -s -- --dir=/usr/local/bin
+      args:
+        creates: "{{ cbm_bin }}"
+      when: install_cbm | bool
+
+    - name: Shared helper directory
+      ansible.builtin.file:
+        path: "{{ lumiether_lib }}"
+        state: directory
+        mode: "0755"
+
+    - name: Config merger (readable by every user)
+      ansible.builtin.copy:
+        src: "{{ lumiether_src }}/merge-config.py"
+        dest: "{{ lumiether_lib }}/merge-config.py"
+        mode: "0755"
+
+    - name: Per-user setup
+      ansible.builtin.include_tasks: tasks/lumiether_user.yml
+      loop: "{{ lumiether_users }}"
+      loop_control:
+        loop_var: lu
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: "{{ lumiether_report | default([]) }}"

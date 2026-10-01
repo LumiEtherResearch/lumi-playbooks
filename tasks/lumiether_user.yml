@@ -1,0 +1,83 @@
+---
+# Included once per user (loop variable: lu).
+- name: "{{ lu }}: look up home directory"
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ lu }}"
+  failed_when: false
+
+- name: "{{ lu }}: set home"
+  ansible.builtin.set_fact:
+    lu_home: "{{ getent_passwd[lu][4] }}"
+  when: getent_passwd[lu] is defined
+
+- name: "{{ lu }}: skip unknown user"
+  ansible.builtin.set_fact:
+    lumiether_report: "{{ lumiether_report | default([]) + [lu ~ ': SKIPPED (no such user)'] }}"
+  when: getent_passwd[lu] is not defined
+
+- name: "{{ lu }}: apply"
+  when: getent_passwd[lu] is defined
+  block:
+    - name: "{{ lu }}: ~/.vibe directories"
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ lu }}"
+        group: "{{ lu }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ lu_home }}/.vibe", mode: "0700" }
+        - { path: "{{ lu_home }}/.vibe/agents", mode: "0755" }
+        - { path: "{{ lu_home }}/.vibe/prompts", mode: "0755" }
+
+    - name: "{{ lu }}: lumiether agent and prompt"
+      ansible.builtin.copy:
+        src: "{{ lumiether_src }}/{{ item.src }}"
+        dest: "{{ lu_home }}/.vibe/{{ item.dest }}"
+        owner: "{{ lu }}"
+        group: "{{ lu }}"
+        mode: "0600"
+      loop:
+        - { src: agents/lumiether.toml, dest: agents/lumiether.toml }
+        - { src: prompts/lumiether-codebase-first.md, dest: prompts/lumiether-codebase-first.md }
+
+    - name: "{{ lu }}: is the config merger installed?"
+      ansible.builtin.stat:
+        path: "{{ lumiether_lib }}/merge-config.py"
+      register: lu_helper
+
+    - name: "{{ lu }}: merge config.toml (backed up once)"
+      ansible.builtin.command: >-
+        {{ vibe_venv }}/bin/python {{ lumiether_lib }}/merge-config.py
+        {{ lu_home }}/.vibe/config.toml {{ '--check' if ansible_check_mode else '' }}
+      become_user: "{{ lu }}"
+      environment:
+        HOME: "{{ lu_home }}"
+      register: lu_merge
+      changed_when: "lu_merge.stdout is defined and (lu_merge.stdout is match('changed ') or lu_merge.stdout is match('would change '))"
+      failed_when: lu_merge.rc not in [0, 3]
+      check_mode: false
+      when: lu_helper.stat.exists
+
+    - name: "{{ lu }}: Codebase Memory settings"
+      ansible.builtin.command: "{{ cbm_bin }} config set {{ item }}"
+      become_user: "{{ lu }}"
+      environment:
+        HOME: "{{ lu_home }}"
+      loop:
+        - auto_index true
+        - auto_index_limit 50000
+        - auto_watch true
+        - watcher_enabled true
+      changed_when: false
+      when: configure_cbm | bool and lu_merge.rc | default(1) == 0 and not ansible_check_mode
+
+    - name: "{{ lu }}: record result"
+      ansible.builtin.set_fact:
+        lumiether_report: >-
+          {{ lumiether_report | default([]) +
+             [lu ~ ': ' ~ ('would install the helper, then configure (dry run)'
+                           if not lu_helper.stat.exists else
+                           ('CONFLICT - config left unchanged: ' ~ lu_merge.stderr
+                            if lu_merge.rc == 3 else (lu_merge.stdout | trim)))] }}
