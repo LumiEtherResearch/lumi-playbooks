@@ -74,8 +74,10 @@ def main():
         print(f"ERROR: {path} is not valid TOML outside the managed blocks: {exc}", file=sys.stderr)
         return 1
 
-    if TOP_BEGIN not in current and TBL_BEGIN not in current and is_configured(before):
-        print(f"unchanged {path} (already configured; no managed markers)")
+    no_markers = TOP_BEGIN not in current and TBL_BEGIN not in current
+    user_owns_bash = "bash" in before.get("tools", {})  # [tools.bash] sits outside the managed blocks
+    if (no_markers or user_owns_bash) and is_configured(tomllib.loads(current)):
+        print(f"unchanged {path} (already configured; settings are outside the managed blocks)")
         return 0
 
     conflicts = []
