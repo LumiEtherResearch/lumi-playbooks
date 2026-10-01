@@ -1,0 +1,43 @@
+---
+# Per-developer Plum isolation, host side.
+# For each developer it creates: a private workspace directory, a dedicated SSH key pair for that developer's
+# Plum, the bridge wrapper Plum calls, and an authorized_keys entry in THAT developer's account with a forced
+# command, pinned to the Plum container's fixed IP. Idempotent. Does not touch the existing shared "plum".
+- name: LumiEther per-developer Plum isolation (host side)
+  hosts: "{{ target | default('all') }}"
+  become: true
+  vars:
+    plum_devs:
+      - { name: abhi,  ip: 172.20.10.11 }
+      - { name: anish, ip: 172.20.10.12 }
+    container_uid: 1000          # the "node" user inside the Plum image
+    container_gid: 1000
+    bridge_host: 172.20.0.1      # docker gateway of the coding-agent network, where sshd is reached
+    bridge_cmd: /usr/local/bin/vibe-acp-bridge
+    ws_root: /srv/lumiether/workspaces
+    plum_base: /srv
+    known_hosts_src: /srv/plum/config/kimi/vibe-bridge/known_hosts
+  tasks:
+    - name: Bridge forced command exists
+      ansible.builtin.stat:
+        path: "{{ bridge_cmd }}"
+      register: bridge_stat
+      failed_when: not bridge_stat.stat.exists
+
+    - name: Workspace root and the existing Plum known_hosts exist
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop: ["{{ ws_root }}", "{{ known_hosts_src }}"]
+      register: base_stat
+      failed_when: not base_stat.stat.exists
+
+    - name: Set up each developer
+      ansible.builtin.include_tasks: tasks/plum_dev.yml
+      loop: "{{ plum_devs }}"
+      loop_control:
+        loop_var: pd
+        label: "{{ pd.name }}"
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: "{{ plum_report | default(['nothing done']) }}"

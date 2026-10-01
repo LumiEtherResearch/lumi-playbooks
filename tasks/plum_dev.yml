@@ -1,0 +1,139 @@
+---
+# One developer's host-side Plum isolation. Loop variable: pd (name, ip).
+- name: "{{ pd.name }}: look up account"
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ pd.name }}"
+
+- name: "{{ pd.name }}: set paths"
+  ansible.builtin.set_fact:
+    pd_home: "{{ getent_passwd[pd.name][4] }}"
+    pd_uid: "{{ getent_passwd[pd.name][1] }}"
+    pd_ws: "{{ ws_root }}/{{ pd.name }}"
+    pd_root: "{{ plum_base }}/plum-{{ pd.name }}"
+    pd_keydir: "{{ plum_base }}/plum-{{ pd.name }}/config/kimi/vibe-bridge"
+
+- name: "{{ pd.name }}: workspace directory (owner only; permissions are set by the ACL below)"
+  ansible.builtin.file:
+    path: "{{ pd_ws }}"
+    state: directory
+    owner: "{{ pd.name }}"
+    group: "{{ pd.name }}"
+  # No "mode" here on purpose: with an ACL, chmod rewrites the ACL mask and would silently take write access away from the container.
+
+- name: "{{ pd.name }}: does the workspace exist yet? (it will not in a dry run on a fresh host)"
+  ansible.builtin.stat:
+    path: "{{ pd_ws }}"
+  register: pd_ws_stat
+
+- name: "{{ pd.name }}: read workspace ACL"
+  ansible.builtin.command: getfacl -p -n "{{ pd_ws }}"
+  register: pd_acl
+  changed_when: false
+  check_mode: false
+  when: pd_ws_stat.stat.exists
+
+- name: "{{ pd.name }}: only this developer and the Plum container uid can use the workspace (also for new files)"
+  ansible.builtin.command: >-
+    setfacl -m u:{{ container_uid }}:rwx -m g::r-x -m o::--- -m m::rwx
+    -m d:u:{{ container_uid }}:rwx -m d:u:{{ pd_uid }}:rwx -m d:g::r-x -m d:o::--- -m d:m::rwx
+    "{{ pd_ws }}"
+  when: >-
+    not pd_ws_stat.stat.exists or
+    pd_acl.stdout is not search('(?m)^user:' ~ container_uid ~ ':rwx') or
+    'mask::rwx' not in pd_acl.stdout or
+    'other::---' not in pd_acl.stdout or
+    ('default:user:' ~ container_uid ~ ':rwx') not in pd_acl.stdout or
+    ('default:user:' ~ pd_uid ~ ':rwx') not in pd_acl.stdout or
+    'default:other::---' not in pd_acl.stdout or
+    'default:mask::rwx' not in pd_acl.stdout
+
+- name: "{{ pd.name }}: Plum config directories"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ container_uid }}"
+    group: "{{ container_gid }}"
+    mode: "{{ '0700' if item.endswith('vibe-bridge') else '0755' }}"
+  loop:
+    - "{{ pd_root }}"
+    - "{{ pd_root }}/config"
+    - "{{ pd_root }}/config/kimi"
+    - "{{ pd_keydir }}"
+
+- name: "{{ pd.name }}: dedicated bridge key (created once, never replaced)"
+  ansible.builtin.command:
+    cmd: ssh-keygen -q -t ed25519 -N "" -C "plum-{{ pd.name }}-bridge" -f "{{ pd_keydir }}/id_ed25519"
+    creates: "{{ pd_keydir }}/id_ed25519"
+
+- name: "{{ pd.name }}: key file ownership and modes"
+  ansible.builtin.file:
+    path: "{{ pd_keydir }}/{{ item.f }}"
+    owner: "{{ container_uid }}"
+    group: "{{ container_gid }}"
+    mode: "{{ item.m }}"
+  loop:
+    - { f: id_ed25519, m: "0600" }
+    - { f: id_ed25519.pub, m: "0644" }
+  when: not ansible_check_mode
+
+- name: "{{ pd.name }}: does the key directory exist yet?"
+  ansible.builtin.stat:
+    path: "{{ pd_keydir }}"
+  register: pd_keydir_stat
+
+- name: "{{ pd.name }}: pinned host key for the bridge address"
+  ansible.builtin.copy:
+    src: "{{ known_hosts_src }}"
+    dest: "{{ pd_keydir }}/known_hosts"
+    remote_src: true
+    force: false
+    owner: "{{ container_uid }}"
+    group: "{{ container_gid }}"
+    mode: "0644"
+  when: pd_keydir_stat.stat.exists
+
+- name: "{{ pd.name }}: bridge wrapper that Plum calls (connects as this developer only)"
+  ansible.builtin.copy:
+    dest: "{{ pd_keydir }}/vibe-acp-remote"
+    owner: "{{ container_uid }}"
+    group: "{{ container_gid }}"
+    mode: "0755"
+    content: |
+      #!/bin/sh
+      # Per-developer bridge for {{ pd.name }}. Ignores the "acp" argument Plum appends; the forced command on the host decides what runs.
+      exec ssh -i /home/node/.kimi-code/vibe-bridge/id_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes \
+        -o UserKnownHostsFile=/home/node/.kimi-code/vibe-bridge/known_hosts -o StrictHostKeyChecking=yes \
+        -o LogLevel=ERROR -o ServerAliveInterval=30 {{ pd.name }}@{{ bridge_host }} acp
+  when: pd_keydir_stat.stat.exists
+
+- name: "{{ pd.name }}: read public key"
+  ansible.builtin.slurp:
+    src: "{{ pd_keydir }}/id_ed25519.pub"
+  register: pd_pub
+  when: not ansible_check_mode
+
+- name: "{{ pd.name }}: ~/.ssh directory"
+  ansible.builtin.file:
+    path: "{{ pd_home }}/.ssh"
+    state: directory
+    owner: "{{ pd.name }}"
+    group: "{{ pd.name }}"
+    mode: "0700"
+
+- name: "{{ pd.name }}: authorized_keys entry (forced command, pinned to this Plum's container IP)"
+  ansible.builtin.lineinfile:
+    path: "{{ pd_home }}/.ssh/authorized_keys"
+    regexp: ' plum-{{ pd.name }}-bridge$'
+    line: >-
+      command="{{ bridge_cmd }}",from="{{ pd.ip }}",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding
+      {{ (pd_pub.content | b64decode).split()[0] }} {{ (pd_pub.content | b64decode).split()[1] }} plum-{{ pd.name }}-bridge
+    create: true
+    owner: "{{ pd.name }}"
+    group: "{{ pd.name }}"
+    mode: "0600"
+  when: not ansible_check_mode
+
+- name: "{{ pd.name }}: record"
+  ansible.builtin.set_fact:
+    plum_report: "{{ (plum_report | default([])) + [pd.name ~ ': workspace ' ~ pd_ws ~ ', key ' ~ pd_keydir ~ '/id_ed25519, container ip ' ~ pd.ip] }}"
