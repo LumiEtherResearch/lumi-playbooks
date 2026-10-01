@@ -47,6 +47,18 @@ def default_allowlist():
         return None
 
 
+def is_configured(cfg):
+    """True when the config already holds every LumiEther setting (e.g. Vibe rewrote the
+    file and dropped the marker comments)."""
+    if cfg.get("default_agent") != AGENT:
+        return False
+    if not any(s.get("name") == MCP_NAME and s.get("command") == MCP_COMMAND
+               for s in cfg.get("mcp_servers", [])):
+        return False
+    allow = cfg.get("tools", {}).get("bash", {}).get("allowlist", [])
+    return all(e in allow for e in EXTRA_ALLOW)
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     check = "--check" in sys.argv
@@ -61,6 +73,10 @@ def main():
     except tomllib.TOMLDecodeError as exc:
         print(f"ERROR: {path} is not valid TOML outside the managed blocks: {exc}", file=sys.stderr)
         return 1
+
+    if TOP_BEGIN not in current and TBL_BEGIN not in current and is_configured(before):
+        print(f"unchanged {path} (already configured; no managed markers)")
+        return 0
 
     conflicts = []
     if "default_agent" in before and before["default_agent"] != AGENT:
