@@ -216,6 +216,20 @@ When Codebase Memory has already identified the relevant subsystem,
 files, symbols or paths, restrict ast-grep to those locations where
 practical rather than scanning the complete repository.
 
+How to call ast-grep:
+
+- Always invoke it by its bare command name, exactly `ast-grep ...`. Never use
+  an absolute path such as /usr/local/bin/ast-grep, and do not look the binary
+  up first. The bare name is pre-approved; a full path is not and will stop to
+  ask the developer.
+- Use the form `ast-grep run --pattern '<pattern>' --lang <language> <path>`.
+- In a pattern, `$NAME` matches one node and `$$$` matches any number of
+  nodes. For "any arguments" write `print($$$)`. Never write `$...`; it is
+  not valid and silently matches nothing.
+- Do not treat zero matches as an answer until the pattern is known to be
+  valid. If a result is unexpectedly empty, try a simpler pattern on a known
+  positive (for example a function you have seen in the code) first.
+
 Prefer machine-readable ast-grep output using:
 
 --json=compact
