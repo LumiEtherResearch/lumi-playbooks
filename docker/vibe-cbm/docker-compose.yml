@@ -22,6 +22,10 @@ services:
       - vibe-config:/root/.vibe
       # Model provider fragment, created on the host (see enable-container-model.sh).
       - /etc/lumiether/vibe-model.toml:/etc/lumiether/vibe-model.toml:ro
+    ports:
+      # Loopback on the host only. Developers reach it through an SSH tunnel;
+      # it is never exposed on the LAN.
+      - "127.0.0.1:19187:19187"
     tty: true
     stdin_open: true
 

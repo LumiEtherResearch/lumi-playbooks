@@ -1,6 +1,7 @@
 FROM ubuntu:24.04
 
 # git: required by Codebase Memory's watcher and detect_changes.
+# xz-utils: to unpack the Node tarball below.
 RUN apt-get update && apt-get install -y \
     curl \
     ca-certificates \
@@ -8,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     python3-venv \
     python3-pip \
     git \
+    xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv (needed for Vibe)
@@ -33,14 +35,35 @@ RUN ln -sf /opt/mistral-vibe/bin/vibe /usr/local/bin/vibe \
 RUN curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh \
     | env HOME=/root bash -s -- --dir=/usr/local/bin
 
+# Agent Host (AHP): Node, ahpd, the ACP backend plugin and the ahpc test client.
+# Node is a checksum-verified tarball; everything is version-pinned.
+ARG NODE_VERSION=22.22.2
+ARG AHPD_VERSION=0.8.0
+ARG AHPC_VERSION=0.6.0
+RUN set -eux; \
+    case "$(dpkg --print-architecture)" in amd64) NA=x64;; arm64) NA=arm64;; *) echo unsupported arch; exit 1;; esac; \
+    F="node-v${NODE_VERSION}-linux-${NA}.tar.xz"; \
+    curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/${F}"; \
+    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt" | grep " ${F}$" | sha256sum -c -; \
+    mkdir -p /opt/node && tar -xJf "${F}" -C /opt/node --strip-components=1 && rm -f "${F}"
+ENV PATH=/opt/node/bin:${PATH}
+RUN npm i -g "@ahpd/server@${AHPD_VERSION}" "@softov/ahpc@${AHPC_VERSION}" \
+ && ahpd plugin install "@ahpd/agent-acp@${AHPD_VERSION}"
+COPY lumiether/patch-ahpd-plugin.mjs /opt/lumiether/patch-ahpd-plugin.mjs
+RUN node /opt/lumiether/patch-ahpd-plugin.mjs /root/.config/ahpd
+
 # LumiEther-managed Vibe agent, prompt and config generator (synced into the
 # /root/.vibe volume by the entrypoint on every start).
 COPY lumiether/ /opt/lumiether/
-RUN chmod 0755 /opt/lumiether/entrypoint.sh /opt/lumiether/gen-config.py
+RUN chmod 0755 /opt/lumiether/entrypoint.sh /opt/lumiether/gen-config.py \
+    /opt/lumiether/run-ahpd.sh /opt/lumiether/patch-ahpd-plugin.mjs
 
 RUN mkdir -p /workspaces /data/codebase-memory
 
 WORKDIR /workspaces
 
 ENTRYPOINT ["/opt/lumiether/entrypoint.sh"]
-CMD ["sleep", "infinity"]
+# Agent Host in the foreground. Override the command to get a plain idle container.
+CMD ["/opt/lumiether/run-ahpd.sh"]
+
+EXPOSE 19187

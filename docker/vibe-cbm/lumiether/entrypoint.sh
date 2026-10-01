@@ -28,4 +28,25 @@ for kv in "auto_index true" "auto_index_limit 50000" "auto_watch true" "watcher_
     || echo "lumiether-entrypoint: could not set CodebaseMem '$kv'" >&2
 done
 
+# Agent Host config: one ACP backend, the Vibe agent. The container environment
+# (PYTHON_KEYRING_BACKEND, LUMI_ADAPTER_KEY, ...) is inherited by vibe-acp.
+AHPD_CFG=/root/.config/ahpd
+mkdir -p "$AHPD_CFG"
+cat > "$AHPD_CFG/config.json.new" <<'EOF_AHPD'
+{
+  "plugins": [
+    {
+      "name": "@ahpd/agent-acp",
+      "options": {
+        "provider": "vibe",
+        "displayName": "Mistral Vibe (LumiEther)",
+        "command": "/opt/mistral-vibe/bin/vibe-acp",
+        "env": {}
+      }
+    }
+  ]
+}
+EOF_AHPD
+mv -f "$AHPD_CFG/config.json.new" "$AHPD_CFG/config.json"
+
 exec "$@"
