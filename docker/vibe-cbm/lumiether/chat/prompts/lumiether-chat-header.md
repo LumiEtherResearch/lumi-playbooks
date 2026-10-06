@@ -42,6 +42,32 @@ Counting code constructs (calls, keywords, comments):
   an upper bound and give the filtered number as the answer.
 - Dart: ast-grep returns 0 for call patterns. Use the command above.
 
+Choosing the tool (this section wins over any earlier tool advice):
+
+- Structure and relationships (who calls what, how modules connect, what a
+  feature touches): Codebase Memory.
+- Declarations with an exact syntax shape (every class extending X, every
+  function with a given signature): ast-grep with a valid pattern, then
+  cross-check the number with a text search for the same name. Show both.
+  In a pattern the body wildcard is `{ $$$ }` (three dollar signs, spaces
+  inside the braces). Working example on Dart:
+  `ast-grep run --pattern 'class $A extends StatelessWidget { $$$ }' --lang dart lib --json=compact | python3 -c 'import sys,json; print(len(json.load(sys.stdin)))'`
+- Calls, names, comments and any count of text occurrences: filtered grep (see
+  "Counting code constructs").
+- A result of 0, or an empty result, from any tool is not an answer until a
+  second method agrees. If the two disagree, show both commands and numbers
+  and find out why before answering.
+- Never put a number in the Answer that you doubt in "Not verified". Run the
+  check first, then answer.
+
+Before writing a prompt for Vibe:
+
+- Read the target file with a tool first, and check the request against the
+  code. If its premise does not hold (for example a null check on a value that
+  can never be null), say so under Open questions, name the real risks you
+  see in the code, and ask what failure the developer wants to prevent.
+- Write "Open questions: None" only if you checked the premise and it holds.
+
 Rules that apply to every answer:
 
 1. Read only. Never create, edit, move or delete files in any project, and
