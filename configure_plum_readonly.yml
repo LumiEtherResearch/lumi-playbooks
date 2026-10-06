@@ -1,0 +1,51 @@
+---
+# Plum is for discussion and for preparing prompts for Vibe in VS Code. It must never change code.
+#
+# 1. Plum's Vibe gets its own home (~/.vibe-plum) holding a chat-only agent, `lumiether-chat`, whose prompt
+#    requires evidence for every claim and says what was not verified. VS Code's ~/.vibe is not touched.
+# 2. The Plum bridge script (/usr/local/bin/vibe-acp-bridge) runs Vibe inside a read-only sandbox
+#    (bubblewrap): the whole filesystem is read-only except ~/.vibe-plum, ~/.cache and /tmp.
+#
+# Imported by configure_plum_isolation.yml, so the AWX templates lumiether-plum-isolation-check / -apply run it.
+# Idempotent. The previous bridge script is kept once as vibe-acp-bridge.bak-pre-readonly (rollback = copy it back).
+- name: Plum read-only chat setup
+  hosts: "{{ target | default('all') }}"
+  become: true
+  vars:
+    plum_ro_users: [abhi, anish, node-1]
+    bridge_cmd: /usr/local/bin/vibe-acp-bridge
+    bwrap_bin: /usr/bin/bwrap
+    chat_src: "{{ playbook_dir }}/docker/vibe-cbm/lumiether/chat"
+    base_prompt_src: "{{ playbook_dir }}/docker/vibe-cbm/lumiether/prompts/lumiether-codebase-first.md"
+  tasks:
+    - name: bubblewrap is installed
+      ansible.builtin.stat:
+        path: "{{ bwrap_bin }}"
+      register: bwrap_stat
+      failed_when: not bwrap_stat.stat.exists
+
+    - name: Set up each user's Plum home (before the bridge is switched over)
+      ansible.builtin.include_tasks: tasks/plum_readonly_user.yml
+      loop: "{{ plum_ro_users }}"
+      loop_control:
+        loop_var: pr
+
+    - name: Keep the current bridge script once
+      ansible.builtin.copy:
+        src: "{{ bridge_cmd }}"
+        dest: "{{ bridge_cmd }}.bak-pre-readonly"
+        remote_src: true
+        force: false
+        mode: preserve
+
+    - name: Install the read-only sandboxed bridge script
+      ansible.builtin.copy:
+        src: "{{ chat_src }}/vibe-acp-bridge"
+        dest: "{{ bridge_cmd }}"
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: "{{ plum_ro_report | default([]) }}"

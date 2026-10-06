@@ -1,0 +1,14 @@
+#!/bin/bash
+# Forced command for the Plum bridge keys. Ignores whatever the client sends.
+# Runs Mistral Vibe for Plum inside a read-only sandbox: the whole filesystem is read-only
+# (so no project can be changed), except Vibe's own Plum home, the user's cache and /tmp.
+# Vibe in VS Code is not affected: it uses ~/.vibe and is not started through this script.
+export PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
+export VIBE_HOME="$HOME/.vibe-plum"
+mkdir -p "$VIBE_HOME" "$HOME/.cache"
+exec /usr/bin/bwrap \
+  --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp \
+  --bind "$VIBE_HOME" "$VIBE_HOME" \
+  --bind "$HOME/.cache" "$HOME/.cache" \
+  --die-with-parent \
+  /opt/mistral-vibe/bin/vibe-acp --legacy-harness

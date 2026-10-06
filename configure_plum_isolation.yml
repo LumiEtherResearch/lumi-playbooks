@@ -41,3 +41,6 @@
     - name: Summary
       ansible.builtin.debug:
         msg: "{{ plum_report | default(['nothing done']) }}"
+
+# Read-only chat setup for Plum (agent lumiether-chat + sandboxed bridge)
+- import_playbook: configure_plum_readonly.yml

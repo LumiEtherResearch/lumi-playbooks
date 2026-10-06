@@ -1,0 +1,12 @@
+agent_type = "agent"
+display_name = "LumiEther Chat"
+description = "Read-only discussion agent: answers with evidence and drafts prompts for Vibe in VS Code. Never changes files."
+safety = "safe"
+
+system_prompt_id = "lumiether-chat"
+
+[tools.write_file]
+permission = "never"
+
+[tools.edit]
+permission = "never"

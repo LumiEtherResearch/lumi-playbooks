@@ -1,0 +1,94 @@
+---
+# Included once per user (loop variable: pr).
+- name: "{{ pr }}: look up home directory"
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ pr }}"
+  failed_when: false
+
+- name: "{{ pr }}: skip unknown user"
+  ansible.builtin.set_fact:
+    plum_ro_report: "{{ plum_ro_report | default([]) + [pr ~ ': SKIPPED (no such user)'] }}"
+  when: getent_passwd[pr] is not defined
+
+- name: "{{ pr }}: apply"
+  when: getent_passwd[pr] is defined
+  vars:
+    pr_home: "{{ getent_passwd[pr][4] }}"
+  block:
+    - name: "{{ pr }}: the sandbox starts for this user and makes a project read-only"
+      ansible.builtin.command: >-
+        {{ bwrap_bin }} --ro-bind / / --dev /dev --proc /proc
+        sh -c 'touch "$1" 2>/dev/null && exit 1 || exit 0' sh {{ pr_home }}/.plum-ro-probe
+      become_user: "{{ pr }}"
+      changed_when: false
+      check_mode: false
+
+    - name: "{{ pr }}: the normal Vibe config exists (run lumiether-vibe-apply first if not)"
+      ansible.builtin.stat:
+        path: "{{ pr_home }}/.vibe/config.toml"
+      register: pr_cfg
+      failed_when: not pr_cfg.stat.exists
+
+    - name: "{{ pr }}: Plum home directories"
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ pr }}"
+        group: "{{ pr }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ pr_home }}/.vibe-plum", mode: "0700" }
+        - { path: "{{ pr_home }}/.vibe-plum/agents", mode: "0755" }
+        - { path: "{{ pr_home }}/.vibe-plum/prompts", mode: "0755" }
+        - { path: "{{ pr_home }}/.cache", mode: "0700" }
+      loop_control:
+        label: "{{ item.path }}"
+
+    - name: "{{ pr }}: chat agent"
+      ansible.builtin.copy:
+        src: "{{ chat_src }}/agents/lumiether-chat.toml"
+        dest: "{{ pr_home }}/.vibe-plum/agents/lumiether-chat.toml"
+        owner: "{{ pr }}"
+        group: "{{ pr }}"
+        mode: "0600"
+
+    # The chat prompt = the chat rules + the normal LumiEther codebase prompt, so prompt fixes reach Plum too.
+    - name: "{{ pr }}: chat prompt (rules, then the codebase prompt)"
+      ansible.builtin.copy:
+        content: "{{ lookup('ansible.builtin.file', chat_src ~ '/prompts/lumiether-chat-header.md', rstrip=False) }}{{ lookup('ansible.builtin.file', base_prompt_src, rstrip=False) }}"
+        dest: "{{ pr_home }}/.vibe-plum/prompts/lumiether-chat.md"
+        owner: "{{ pr }}"
+        group: "{{ pr }}"
+        mode: "0600"
+
+    - name: "{{ pr }}: Plum config, seeded once from the normal Vibe config (provider, model, MCP)"
+      ansible.builtin.copy:
+        src: "{{ pr_home }}/.vibe/config.toml"
+        dest: "{{ pr_home }}/.vibe-plum/config.toml"
+        remote_src: true
+        force: false
+        owner: "{{ pr }}"
+        group: "{{ pr }}"
+        mode: "0600"
+      when: not ansible_check_mode
+
+    - name: "{{ pr }}: Plum starts in the chat agent"
+      ansible.builtin.lineinfile:
+        path: "{{ pr_home }}/.vibe-plum/config.toml"
+        regexp: '^default_agent\s*='
+        line: 'default_agent = "lumiether-chat"'
+        insertbefore: BOF
+      when: not ansible_check_mode
+
+    - name: "{{ pr }}: exactly one default_agent, and it is the chat agent"
+      ansible.builtin.shell: >-
+        test "$(grep -c '^default_agent' {{ pr_home }}/.vibe-plum/config.toml)" = 1 &&
+        grep -q '^default_agent = "lumiether-chat"$' {{ pr_home }}/.vibe-plum/config.toml
+      changed_when: false
+      check_mode: false
+      when: not ansible_check_mode
+
+    - name: "{{ pr }}: record result"
+      ansible.builtin.set_fact:
+        plum_ro_report: "{{ plum_ro_report | default([]) + [pr ~ ': Plum home ~/.vibe-plum ready, agent lumiether-chat, sandbox checked'] }}"
