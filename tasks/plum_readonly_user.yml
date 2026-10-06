@@ -89,6 +89,39 @@
       check_mode: false
       when: not ansible_check_mode
 
+    # Plum answers questions about code, so it uses the larger model. VS Code Vibe (~/.vibe) is not touched.
+    - name: "{{ pr }}: Plum config has a models list that can be extended"
+      ansible.builtin.shell: >-
+        grep -q '^models = \[' {{ pr_home }}/.vibe-plum/config.toml &&
+        grep -q 'provider = "wif-local"' {{ pr_home }}/.vibe-plum/config.toml
+      changed_when: false
+      check_mode: false
+      when: not ansible_check_mode
+
+    - name: "{{ pr }}: Plum model {{ plum_model_alias }} is defined"
+      ansible.builtin.lineinfile:
+        path: "{{ pr_home }}/.vibe-plum/config.toml"
+        regexp: '^\s*\{ name = "{{ plum_model_name }}"'
+        insertafter: '^models = \['
+        line: '    { name = "{{ plum_model_name }}", provider = "wif-local", alias = "{{ plum_model_alias }}" },'
+      when: not ansible_check_mode
+
+    - name: "{{ pr }}: Plum uses {{ plum_model_alias }}"
+      ansible.builtin.lineinfile:
+        path: "{{ pr_home }}/.vibe-plum/config.toml"
+        regexp: '^active_model\s*='
+        line: 'active_model = "{{ plum_model_alias }}"'
+        insertbefore: BOF
+      when: not ansible_check_mode
+
+    - name: "{{ pr }}: exactly one active_model, and it is the Plum model"
+      ansible.builtin.shell: >-
+        test "$(grep -c '^active_model' {{ pr_home }}/.vibe-plum/config.toml)" = 1 &&
+        grep -q '^active_model = "{{ plum_model_alias }}"$' {{ pr_home }}/.vibe-plum/config.toml
+      changed_when: false
+      check_mode: false
+      when: not ansible_check_mode
+
     - name: "{{ pr }}: record result"
       ansible.builtin.set_fact:
-        plum_ro_report: "{{ plum_ro_report | default([]) + [pr ~ ': Plum home ~/.vibe-plum ready, agent lumiether-chat, sandbox checked'] }}"
+        plum_ro_report: "{{ plum_ro_report | default([]) + [pr ~ ': Plum home ~/.vibe-plum ready, agent lumiether-chat, model ' ~ plum_model_alias ~ ', sandbox checked'] }}"
