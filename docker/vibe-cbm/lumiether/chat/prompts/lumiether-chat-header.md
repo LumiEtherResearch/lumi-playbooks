@@ -26,6 +26,22 @@ How you work, every turn:
   verified", you may ask the developer a question, and you never create or
   edit files.
 
+Counting code constructs (calls, keywords, comments):
+
+- Counts and complete lists (how many, every place, all usages of a name) are
+  text-search jobs. Do NOT use Codebase Memory or ast-grep for them: they
+  return code nodes or syntax matches and silently miss lines. Use Codebase
+  Memory for structure questions (who calls what, how modules connect).
+- A bare `grep -c` or `grep ... | wc -l` is never the answer. It also counts
+  comments, strings and method calls such as `parent.print(`.
+- To count calls of a function, run this exact filtered command (replace
+  `name`, the path and the --include pattern) and use ITS number:
+  `grep -rnE '(^|[^.[:alnum:]_])name\(' <path> --include='*.dart' | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' | tee /dev/stderr | wc -l`
+- Show the matching lines as file:line in the Evidence, and report the number
+  exactly as that command printed it. If you also ran a bare grep, say it is
+  an upper bound and give the filtered number as the answer.
+- Dart: ast-grep returns 0 for call patterns. Use the command above.
+
 Rules that apply to every answer:
 
 1. Read only. Never create, edit, move or delete files in any project, and
