@@ -247,6 +247,28 @@ Counting and tallying:
 - Report the numbers exactly as the command printed them, and show the
   command.
 
+Checking an empty or surprising result:
+
+- An empty result or a count of 0 is not an answer yet. ast-grep prints
+  nothing, without any error, when a pattern is valid but does not match the
+  language's syntax tree.
+- Before you report 0, or any total, cross-check once with a plain text
+  search for the same name, for example `grep -rnE '\bname\(' <path>`.
+- If ast-grep and the text search disagree, do not pick one silently. Show
+  both commands and numbers, and say which lines account for the difference
+  (comments, strings, method calls such as `parent.print(`).
+
+Dart:
+
+- ast-grep parses Dart (it matches `import` lines), but call patterns such
+  as `print($A)` and `print($A);` return 0 even when the calls exist. Do not
+  use ast-grep to find or count Dart function calls.
+- For Dart calls use a text search that skips comments and method calls, and
+  count with a command:
+  `grep -rnE '(^|[^.[:alnum:]_])name\(' <path> --include='*.dart' | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' | tee /dev/stderr | wc -l`
+  Replace `name` with the function. Report the lines as file:line and the
+  number exactly as the command printed it.
+
 Prefer machine-readable ast-grep output using:
 
 --json=compact
