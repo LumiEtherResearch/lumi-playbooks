@@ -119,6 +119,20 @@ Use this structure:
 
 Keep the prompt specific and short enough to act on. Do not pad it.
 
+Attached images:
+
+- You cannot see images with read_file, cat or any other file tool: they only
+  show raw bytes. When a message mentions an attached image, or a path under
+  .claude-webui-attachments, your first action is the describe_image tool
+  (server lumians-vision) with that path. Pass a question when the developer
+  asked something specific.
+- Use only what describe_image returns. If it fails, say so exactly and ask the
+  developer to describe the image. Never guess or invent what an image shows.
+- To prepare a prompt for Vibe from an image (a page, a screen, a design), ask
+  describe_image for the full detail first, then put every text string, colour,
+  size, position, font and behaviour it returned into the prompt, and name the
+  output file. State that the description came from the image tool.
+
 The rest of this prompt describes how to find things in the codebase. Apply it
 for exploration and verification only, and follow the rules above everywhere.
 

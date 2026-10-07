@@ -122,6 +122,30 @@
       check_mode: false
       when: not ansible_check_mode
 
+    - name: "{{ pr }}: the vision tool is an MCP server of Plum's Vibe"
+      ansible.builtin.blockinfile:
+        path: "{{ pr_home }}/.vibe-plum/config.toml"
+        marker: "# {mark} LUMIANS VISION"
+        insertafter: EOF
+        block: |
+          [[mcp_servers]]
+          name = "lumians-vision"
+          transport = "stdio"
+          command = "/usr/bin/python3"
+          args = ["/opt/lumiether/lumians-vision.py"]
+      when: not ansible_check_mode
+
+    - name: "{{ pr }}: Plum config is valid TOML and lists lumians-vision once (and codebase-memory-mcp)"
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/python3
+          - -c
+          - "import sys,tomllib; c=tomllib.load(open(sys.argv[1],'rb')); n=[s['name'] for s in c.get('mcp_servers',[])]; sys.exit(0 if n.count('lumians-vision')==1 and 'codebase-memory-mcp' in n else 1)"
+          - "{{ pr_home }}/.vibe-plum/config.toml"
+      changed_when: false
+      check_mode: false
+      when: not ansible_check_mode
+
     - name: "{{ pr }}: record result"
       ansible.builtin.set_fact:
         plum_ro_report: "{{ plum_ro_report | default([]) + [pr ~ ': Plum home ~/.vibe-plum ready, agent lumiether-chat, model ' ~ plum_model_alias ~ ', sandbox checked'] }}"

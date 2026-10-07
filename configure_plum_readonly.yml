@@ -26,6 +26,22 @@
       register: bwrap_stat
       failed_when: not bwrap_stat.stat.exists
 
+    - name: Directory for the LUMIANS vision tool
+      ansible.builtin.file:
+        path: /opt/lumiether
+        state: directory
+        mode: "0755"
+
+    # Lets Plum's Vibe read an attached image: it asks the vision model and returns text. It can only read the
+    # user's own .claude-webui-attachments folder.
+    - name: LUMIANS vision tool
+      ansible.builtin.copy:
+        src: "{{ chat_src }}/lumians-vision.py"
+        dest: /opt/lumiether/lumians-vision.py
+        owner: root
+        group: root
+        mode: "0755"
+
     - name: Set up each user's Plum home (before the bridge is switched over)
       ansible.builtin.include_tasks: tasks/plum_readonly_user.yml
       loop: "{{ plum_ro_users }}"
