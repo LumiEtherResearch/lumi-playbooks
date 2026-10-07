@@ -11,9 +11,20 @@ USER = os.environ.get("LUMIANS_VISION_USER") or getpass.getuser()
 ROOT = os.environ.get("LUMIANS_VISION_ROOT", "/srv/lumiether/workspaces")
 MAX_BYTES = 10 * 1024 * 1024
 OK_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
-DEFAULT_Q = ("Describe this image in exhaustive detail for a developer who must rebuild it exactly: overall layout and "
-             "positions, every visible text string verbatim, colours (give hex estimates), fonts and sizes, icons, "
-             "spacing, shapes, backgrounds, effects (blur, glass, shadows, gradients) and any interactive elements.")
+DEFAULT_Q = (
+    "You are a meticulous UI analyst. Describe ONLY what is visible in the image. Never assume a common layout "
+    "pattern (sidebar, split view, header) unless it is really there. Report in this order:\n"
+    "1. Canvas and background: what fills the screen (photo, gradient, plain colour) and where the main text sits.\n"
+    "2. Every panel or container: say whether it touches a screen edge or floats with a gap on all sides; its "
+    "approximate left, top, width and height as percentages of the whole image; corner radius (sharp, small, large, "
+    "pill); fill (opaque, translucent, frosted glass); border and shadow.\n"
+    "3. Inside each panel, in reading order: every element with its exact visible text, its icon (describe the drawn "
+    "shape), its state (selected, badge, notification dot) and alignment.\n"
+    "4. Typography: for each text role (title, subtitle, labels) the approximate size relative to the image height, "
+    "weight (thin, regular, bold) and colour.\n"
+    "5. Colours: name each colour in words and give a hex only when it is clearly visible; mark guesses with '~'. "
+    "Do not mention colours that are not on screen.\n"
+    "6. Uncertain: list anything you could not read or are unsure about. Never fill gaps with plausible guesses.")
 TOOL = {"name": "describe_image",
         "description": "Look at an image the user attached (a file under .claude-webui-attachments) and return a detailed "
                        "text description. Use this whenever a user message mentions an attached image. Optional 'question' "
@@ -42,7 +53,7 @@ def describe(args):
     if os.path.getsize(real) > MAX_BYTES:
         raise ValueError("image is larger than 10 MB")
     b64 = base64.b64encode(open(real, "rb").read()).decode()
-    body = {"model": MODEL, "max_tokens": 1800, "messages": [{"role": "user", "content": [
+    body = {"model": MODEL, "max_tokens": 2800, "messages": [{"role": "user", "content": [
         {"type": "text", "text": args.get("question") or DEFAULT_Q},
         {"type": "image_url", "image_url": "data:%s;base64,%s" % (mime, b64)}]}]}
     req = urllib.request.Request(API, json.dumps(body).encode(), {"Content-Type": "application/json"})
