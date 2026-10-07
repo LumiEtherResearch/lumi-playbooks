@@ -1,0 +1,119 @@
+---
+# SPIRE agent that heals itself after the host was off or asleep.
+#
+# Problem: the agent joins with a one-time join token. Its identity lasts about an hour and is renewed in the
+# background; while the host is off it expires, the old token cannot be used again, and the agent stays dead until
+# someone runs ~/spire-recover.sh by hand. This play makes that recovery automatic:
+#   - /opt/spire-agent/bin/start-agent.sh waits for the SPIRE server, asks it for a fresh join token and starts clean
+#   - reparent-entries.sh (ExecStartPost) points the workload entries at the new agent and restarts their consumers
+#   - systemd always restarts the agent and never gives up (drop-in selfheal.conf)
+#
+# Imported by configure_plum_isolation.yml, so the AWX templates lumiether-plum-isolation-check / -apply run it.
+# Idempotent. The previous start script is kept once as start-agent.sh.bak-pre-selfheal.
+# Rollback: sudo cp -a /opt/spire-agent/bin/start-agent.sh.bak-pre-selfheal /opt/spire-agent/bin/start-agent.sh
+#           sudo rm /etc/systemd/system/spire-agent.service.d/selfheal.conf && sudo systemctl daemon-reload
+#           then run ~/spire-recover.sh once.
+- name: SPIRE agent self-healing start
+  hosts: "{{ target | default('all') }}"
+  become: true
+  vars:
+    spire_agent_dir: /opt/spire-agent
+    spire_trust_domain_uri: spiffe://lumietherresearch.com
+    spire_agent_socket: /run/spire/agent-sockets/api.sock
+    spire_workload_entries:
+      - { id: 7ad6d15f-b358-4b33-9168-dc3606e29c91, spiffe: oidc-discovery-provider, selector: "unix:user:spire-oidc" }
+      - { id: 9d12fa2d-90a6-44f9-86db-20e7bfae719b, spiffe: vibe, selector: "unix:user:node-1" }
+    spire_restart_after: [spire-oidc, vibe-token]
+    spire_selfheal_src: "{{ playbook_dir }}/docker/spire-agent"
+    spire_token_file: /home/node-1/.config/vibe/sa-token
+    # false only for tests without systemd/docker
+    spire_selfheal_manage_services: true
+  tasks:
+    - name: The SPIRE agent is installed
+      ansible.builtin.stat:
+        path: "{{ spire_agent_dir }}/bin/spire-agent"
+      register: spire_bin
+      failed_when: not spire_bin.stat.exists
+
+    - name: Keep the current start script once
+      ansible.builtin.copy:
+        src: "{{ spire_agent_dir }}/bin/start-agent.sh"
+        dest: "{{ spire_agent_dir }}/bin/start-agent.sh.bak-pre-selfheal"
+        remote_src: true
+        force: false
+        mode: preserve
+
+    - name: Self-healing start script
+      ansible.builtin.copy:
+        src: "{{ spire_selfheal_src }}/start-agent.sh"
+        dest: "{{ spire_agent_dir }}/bin/start-agent.sh"
+        owner: root
+        group: root
+        mode: "0750"
+      register: spire_start_script
+
+    - name: Re-parent script (workload entries follow the new agent)
+      ansible.builtin.template:
+        src: "{{ spire_selfheal_src }}/reparent-entries.sh.j2"
+        dest: "{{ spire_agent_dir }}/bin/reparent-entries.sh"
+        owner: root
+        group: root
+        mode: "0750"
+      register: spire_reparent_script
+
+    - name: systemd drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/system/spire-agent.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: systemd drop-in (always restart, wait for docker, run the re-parent script after start)
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/spire-agent.service.d/selfheal.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by lumi-playbooks (configure_spire_agent.yml)
+          [Unit]
+          After=docker.service
+          Wants=docker.service
+          StartLimitIntervalSec=0
+
+          [Service]
+          Restart=always
+          RestartSec=10
+          TimeoutStartSec=300
+          ExecStartPost=-{{ spire_agent_dir }}/bin/reparent-entries.sh
+      register: spire_dropin
+
+    - name: Reload systemd and restart the agent (it re-attests with a fresh token)
+      when: spire_selfheal_manage_services | bool and (spire_start_script.changed or spire_reparent_script.changed or spire_dropin.changed)
+      block:
+        - name: daemon-reload
+          ansible.builtin.systemd:
+            daemon_reload: true
+
+        - name: restart spire-agent
+          ansible.builtin.systemd:
+            name: spire-agent
+            state: restarted
+            enabled: true
+
+        - name: The Mistral token is fresh again (checked for up to 3 minutes)
+          ansible.builtin.shell: |
+            for i in $(seq 1 36); do
+              age=$(( $(date +%s) - $(stat -c %Y {{ spire_token_file }}) ))
+              [ "$age" -lt 150 ] && { echo "token age ${age}s"; exit 0; }
+              sleep 5
+            done
+            echo "token still stale - roll back (see the comments at the top of configure_spire_agent.yml)"; exit 1
+          changed_when: false
+          check_mode: false
+          when: not ansible_check_mode
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: "SPIRE agent self-healing start is in place (start script changed: {{ spire_start_script.changed }}, re-parent script changed: {{ spire_reparent_script.changed }}, drop-in changed: {{ spire_dropin.changed }})"

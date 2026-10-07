@@ -1,0 +1,30 @@
+#!/bin/bash
+# Managed by lumi-playbooks (configure_spire_agent.yml). Runs after spire-agent starts (ExecStartPost):
+# points the workload entries at the agent that has just attested, then restarts the services that use them.
+set -u
+AGENT_DIR="${SPIRE_AGENT_DIR:-/opt/spire-agent}"
+RUN_DIR="${SPIRE_RUN_DIR:-/run}"
+TD={{ spire_trust_domain_uri }}
+SS="docker exec spire-server /opt/spire/bin/spire-server"
+
+TOKEN=$(cat "$RUN_DIR/spire-agent-token" 2>/dev/null) || { echo "no agent token file" >&2; exit 1; }
+P="$TD/spire/agent/join_token/$TOKEN"
+
+# the agent is ready when its health check passes (node attested, entries synced)
+ready=0
+for i in $(seq 1 60); do
+  if "$AGENT_DIR/bin/spire-agent" healthcheck -socketPath {{ spire_agent_socket }} >/dev/null 2>&1; then ready=1; break; fi
+  sleep 2
+done
+[ "$ready" = 1 ] || echo "agent health check not confirmed after 2 minutes - re-parenting anyway" >&2
+
+{% for e in spire_workload_entries %}
+$SS entry update -entryID {{ e.id }} -parentID "$P" -spiffeID "$TD/{{ e.spiffe }}" -selector {{ e.selector }} || exit 1
+{% endfor %}
+
+# give the agent time to pick the re-parented entries up, then restart the consumers
+# (--no-block: this script runs inside the agent's own start job, so waiting for units ordered after it could deadlock)
+sleep 15
+{% for u in spire_restart_after %}
+systemctl --no-block restart {{ u }} || true
+{% endfor %}
