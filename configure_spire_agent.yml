@@ -85,7 +85,9 @@
           [Service]
           Restart=always
           RestartSec=10
-          TimeoutStartSec=300
+          TimeoutStartSec=900
+          # runs strictly before the agent starts, so the re-parent script can never read the previous token
+          ExecStartPre=-/bin/rm -f /run/spire-agent-token
           ExecStartPost=-{{ spire_agent_dir }}/bin/reparent-entries.sh
       register: spire_dropin
 
@@ -96,20 +98,26 @@
           ansible.builtin.systemd:
             daemon_reload: true
 
+        - name: Time before the restart
+          ansible.builtin.command: date +%s
+          register: spire_before_restart
+          changed_when: false
+          check_mode: false
+
         - name: restart spire-agent
           ansible.builtin.systemd:
             name: spire-agent
             state: restarted
             enabled: true
 
-        - name: The Mistral token is fresh again (checked for up to 3 minutes)
+        - name: The Mistral token was renewed AFTER the restart (checked for up to 5 minutes)
           ansible.builtin.shell: |
-            for i in $(seq 1 36); do
-              age=$(( $(date +%s) - $(stat -c %Y {{ spire_token_file }}) ))
-              [ "$age" -lt 150 ] && { echo "token age ${age}s"; exit 0; }
+            for i in $(seq 1 60); do
+              m=$(stat -c %Y {{ spire_token_file }})
+              [ "$m" -gt {{ spire_before_restart.stdout | int }} ] && { echo "token renewed $(( $(date +%s) - m ))s ago, after the restart"; exit 0; }
               sleep 5
             done
-            echo "token still stale - roll back (see the comments at the top of configure_spire_agent.yml)"; exit 1
+            echo "no new token after the restart - see: journalctl -u spire-agent -n 40, then run ~/spire-recover.sh"; exit 1
           changed_when: false
           check_mode: false
           when: not ansible_check_mode

@@ -7,7 +7,15 @@ RUN_DIR="${SPIRE_RUN_DIR:-/run}"
 TD={{ spire_trust_domain_uri }}
 SS="docker exec spire-server /opt/spire/bin/spire-server"
 
-TOKEN=$(cat "$RUN_DIR/spire-agent-token" 2>/dev/null) || { echo "no agent token file" >&2; exit 1; }
+# systemd starts this script the moment the agent process is launched, but the start script writes the token only
+# after the SPIRE server is healthy (up to 5 minutes after boot), so wait for it (up to 6 minutes)
+TOKEN=""
+for i in $(seq 1 180); do
+  TOKEN=$(cat "$RUN_DIR/spire-agent-token" 2>/dev/null) || TOKEN=""
+  [ -n "$TOKEN" ] && break
+  sleep 2
+done
+[ -n "$TOKEN" ] || { echo "no agent token file after 6 minutes" >&2; exit 1; }
 P="$TD/spire/agent/join_token/$TOKEN"
 
 # the agent is ready when its health check passes (node attested, entries synced)

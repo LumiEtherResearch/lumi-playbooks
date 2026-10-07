@@ -7,6 +7,9 @@ AGENT_DIR="${SPIRE_AGENT_DIR:-/opt/spire-agent}"
 RUN_DIR="${SPIRE_RUN_DIR:-/run}"
 SS="docker exec spire-server /opt/spire/bin/spire-server"
 
+# the re-parent script (ExecStartPost) starts at the same moment and waits for a NEW token file
+rm -f "$RUN_DIR/spire-agent-token"
+
 # 1. wait for the SPIRE server container (up to about 5 minutes after boot)
 ready=0
 for i in $(seq 1 100); do
