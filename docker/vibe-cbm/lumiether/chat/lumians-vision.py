@@ -24,11 +24,12 @@ DEFAULT_Q = (
     "weight (thin, regular, bold) and colour.\n"
     "5. Colours: name each colour in words and give a hex only when it is clearly visible; mark guesses with '~'. "
     "Do not mention colours that are not on screen.\n"
-    "6. Uncertain: list anything you could not read or are unsure about. Never fill gaps with plausible guesses.")
+    "6. Uncertain: list anything you could not read or are unsure about. Never fill gaps with plausible guesses.\n"
+    "Do not write code, HTML or CSS. Do not suggest how to build it. Only describe what you can see.")
 TOOL = {"name": "describe_image",
         "description": "Look at an image the user attached (a file under .claude-webui-attachments) and return a detailed "
                        "text description. Use this whenever a user message mentions an attached image. Optional 'question' "
-                       "asks something specific about it.",
+                       "adds a specific extra question; the full visual report is always produced.",
         "inputSchema": {"type": "object", "properties": {
             "path": {"type": "string", "description": "Path of the attached image file"},
             "question": {"type": "string", "description": "What to look for (optional)"}}, "required": ["path"]}}
@@ -53,12 +54,16 @@ def describe(args):
     if os.path.getsize(real) > MAX_BYTES:
         raise ValueError("image is larger than 10 MB")
     b64 = base64.b64encode(open(real, "rb").read()).decode()
+    extra = (args.get("question") or "").strip()
+    q = DEFAULT_Q + (("\n\nAfter the numbered report, also answer this specific question, describing only what is visible: " + extra) if extra else "")
     body = {"model": MODEL, "max_tokens": 2800, "messages": [{"role": "user", "content": [
-        {"type": "text", "text": args.get("question") or DEFAULT_Q},
+        {"type": "text", "text": q},
         {"type": "image_url", "image_url": "data:%s;base64,%s" % (mime, b64)}]}]}
     req = urllib.request.Request(API, json.dumps(body).encode(), {"Content-Type": "application/json"})
     r = json.load(urllib.request.urlopen(req, timeout=120))
-    return r["choices"][0]["message"]["content"]
+    text = r["choices"][0]["message"]["content"]
+    return ("IMAGE DESCRIPTION (from the vision model; paste it unchanged into the prompt under the heading "
+            "'Image description (from the image tool)'; do not add layout, colours, libraries or rules that are not in it):\n\n" + text)
 
 
 def send(obj):
