@@ -13,19 +13,19 @@ MAX_BYTES = 10 * 1024 * 1024
 OK_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 DEFAULT_Q = (
     "You are a meticulous UI analyst. Describe ONLY what is visible in the image. Never assume a common layout "
-    "pattern (sidebar, split view, header) unless it is really there. Report in this order:\n"
-    "1. Canvas and background: what fills the screen (photo, gradient, plain colour) and where the main text sits.\n"
-    "2. Every panel or container: say whether it touches a screen edge or floats with a gap on all sides; its "
-    "approximate left, top, width and height as percentages of the whole image; corner radius (sharp, small, large, "
-    "pill); fill (opaque, translucent, frosted glass); border and shadow.\n"
-    "3. Inside each panel, in reading order: every element with its exact visible text, its icon (describe the drawn "
-    "shape), its state (selected, badge, notification dot) and alignment.\n"
-    "4. Typography: for each text role (title, subtitle, labels) the approximate size relative to the image height, "
-    "weight (thin, regular, bold) and colour.\n"
-    "5. Colours: name each colour in words and give a hex only when it is clearly visible; mark guesses with '~'. "
-    "Do not mention colours that are not on screen.\n"
-    "6. Uncertain: list anything you could not read or are unsure about. Never fill gaps with plausible guesses.\n"
-    "Do not write code, HTML or CSS. Do not suggest how to build it. Only describe what you can see.")
+    "pattern (sidebar, split view, header, close button, avatar) unless it is really drawn. Use short bullet lines. "
+    "Report in this order:\n"
+    "1. Background: what fills the screen (photo, gradient, plain colour) and what it shows.\n"
+    "2. Every panel or container, one bullet each: its position in words (left, centre, bottom ...), whether it "
+    "touches a screen edge or floats with a gap on all sides, relative size in words (narrow, wide, small), corner "
+    "shape (sharp, rounded, pill), fill (opaque, translucent, frosted glass) and any border or shadow.\n"
+    "3. Inside each panel, in reading order: every element with its exact visible text, copied letter for letter, "
+    "and a plain description of its icon (what shape is drawn). Mention a badge, dot or highlight only if you can "
+    "see it.\n"
+    "4. Text that sits directly on the background (titles, subtitles): exact words, position, relative size and weight.\n"
+    "5. Colours: name main colours in words only. Do NOT give hex codes, pixel sizes or percentages.\n"
+    "6. Not sure: list anything you could not read or identify. Never fill gaps with plausible guesses.\n"
+    "Do not write code, HTML or CSS. Do not suggest how to build it. Do not add anything that is not on screen.")
 TOOL = {"name": "describe_image",
         "description": "Look at an image the user attached (a file under .claude-webui-attachments) and return a detailed "
                        "text description. Use this whenever a user message mentions an attached image. Optional 'question' "
@@ -62,8 +62,13 @@ def describe(args):
     req = urllib.request.Request(API, json.dumps(body).encode(), {"Content-Type": "application/json"})
     r = json.load(urllib.request.urlopen(req, timeout=120))
     text = r["choices"][0]["message"]["content"]
-    return ("IMAGE DESCRIPTION (from the vision model; paste it unchanged into the prompt under the heading "
-            "'Image description (from the image tool)'; do not add layout, colours, libraries or rules that are not in it):\n\n" + text)
+    return ("FINAL ANSWER. Reply to the developer with the prompt below EXACTLY as written, from 'Goal' to the end. "
+            "Add nothing, remove nothing, and do not reword it. Then add one line: 'The description is machine-generated "
+            "and may miss details; check it against your image before pasting.'\n\n"
+            "Goal\nBuild a single, self-contained HTML file that reproduces the attached UI screenshot as closely as "
+            "possible. Use only what is described below. Where the description says it is unsure, choose something "
+            "simple and neutral rather than inventing detail.\n\n"
+            "Image description (from the image tool)\n" + text.strip() + "\n")
 
 
 def send(obj):
