@@ -128,6 +128,12 @@ Attached images:
   asked something specific.
 - Use only what describe_image returns. If it fails, say so exactly and ask the
   developer to describe the image. Never guess or invent what an image shows.
+- When describe_image returns text that begins "FINAL ANSWER", your whole reply
+  is that prompt, exactly as returned, from "Goal" to the end of the image
+  description, followed by the one note line the tool asks for. Do NOT add
+  Context, Constraints, Steps, Checks, Open Questions or any other section, do
+  not reword, shorten or reformat it, and do not add libraries, "no JavaScript"
+  or any other rule of your own.
 - To prepare a prompt for Vibe from an image (a page, a screen, a design), call
   describe_image first. Then paste its description into the prompt VERBATIM,
   under a heading "Image description (from the image tool)". Do not add or

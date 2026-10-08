@@ -26,6 +26,17 @@ DEFAULT_Q = (
     "5. Colours: name main colours in words only. Do NOT give hex codes, pixel sizes or percentages.\n"
     "6. Not sure: list anything you could not read or identify. Never fill gaps with plausible guesses.\n"
     "Do not write code, HTML or CSS. Do not suggest how to build it. Do not add anything that is not on screen.")
+VERIFY_Q = (
+    "You are checking a written description of the attached image against the image itself. Output a CORRECTED "
+    "description with exactly the same numbered structure (1-6) and the same bullet style. Check every statement:\n"
+    "- Panels: for each panel look at all four edges. If you can see background between a panel edge and the edge of the "
+    "screen, the panel FLOATS there and does not touch that edge. Only say 'touches' when there is no gap at all.\n"
+    "- Text: exact words and line breaks. If words that look like one heading are on one line, keep them on one line.\n"
+    "- Icons, badges, dots: say what is drawn and where; a small coloured dot on an icon is a notification badge. "
+    "Do not rename an icon to something that is not drawn.\n"
+    "- Remove anything in the draft that is not visible. Add anything visible that the draft missed (for example "
+    "a pill or label, a button, an icon with a badge). Keep everything that is correct.\n"
+    "Do not write code, HTML or CSS. Do not use hex codes, pixel sizes or percentages. Output only the corrected description.")
 TOOL = {"name": "describe_image",
         "description": "Look at an image the user attached (a file under .claude-webui-attachments) and return a detailed "
                        "text description. Use this whenever a user message mentions an attached image. Optional 'question' "
@@ -56,12 +67,17 @@ def describe(args):
     b64 = base64.b64encode(open(real, "rb").read()).decode()
     extra = (args.get("question") or "").strip()
     q = DEFAULT_Q + (("\n\nAfter the numbered report, also answer this specific question, describing only what is visible: " + extra) if extra else "")
-    body = {"model": MODEL, "max_tokens": 2800, "messages": [{"role": "user", "content": [
-        {"type": "text", "text": q},
-        {"type": "image_url", "image_url": "data:%s;base64,%s" % (mime, b64)}]}]}
-    req = urllib.request.Request(API, json.dumps(body).encode(), {"Content-Type": "application/json"})
-    r = json.load(urllib.request.urlopen(req, timeout=120))
-    text = r["choices"][0]["message"]["content"]
+    def ask(prompt_text, tokens):
+        body = {"model": MODEL, "max_tokens": tokens, "messages": [{"role": "user", "content": [
+            {"type": "text", "text": prompt_text},
+            {"type": "image_url", "image_url": "data:%s;base64,%s" % (mime, b64)}]}]}
+        req = urllib.request.Request(API, json.dumps(body).encode(), {"Content-Type": "application/json"})
+        r = json.load(urllib.request.urlopen(req, timeout=150))
+        return r["choices"][0]["message"]["content"]
+
+    draft = ask(q, 2800)
+    # second pass: the model checks its own draft against the image (it often gets panel edges and badges wrong first time)
+    text = ask(VERIFY_Q + "\n\nDRAFT DESCRIPTION:\n" + draft, 2800)
     return ("FINAL ANSWER. Reply to the developer with the prompt below EXACTLY as written, from 'Goal' to the end. "
             "Add nothing, remove nothing, and do not reword it. Then add one line: 'The description is machine-generated "
             "and may miss details; check it against your image before pasting.'\n\n"
