@@ -88,6 +88,10 @@
           TimeoutStartSec=900
           # runs strictly before the agent starts, so the re-parent script can never read the previous token
           ExecStartPre=-/bin/rm -f /run/spire-agent-token
+          # spire_open_socket_dir: the agent creates /run/spire root-only (drwx------) on every boot; open it so the
+          # refresher (user node-1) can reach the socket. Must run BEFORE the re-parent script, which restarts it.
+          ExecStartPost=-/usr/bin/timeout 240 /bin/sh -c 'until [ -S {{ spire_agent_socket }} ]; do sleep 1; done'
+          ExecStartPost=-/bin/chmod 0755 /run/spire {{ spire_agent_socket | dirname }}
           ExecStartPost=-{{ spire_agent_dir }}/bin/reparent-entries.sh
       register: spire_dropin
 
@@ -121,6 +125,13 @@
           changed_when: false
           check_mode: false
           when: not ansible_check_mode
+
+    - name: The refresher user (node-1) can reach the SPIRE socket
+      ansible.builtin.command: test -S {{ spire_agent_socket }}
+      become_user: node-1
+      changed_when: false
+      check_mode: false
+      when: spire_selfheal_manage_services | bool and not ansible_check_mode
 
     - name: Summary
       ansible.builtin.debug:
