@@ -13,6 +13,8 @@
   become: true
   vars:
     plum_ro_users: [abhi, anish, node-1]
+    # developers whose git repositories (top level of their home) appear read-only in their own Plum workspace
+    plum_repo_users: [abhi, anish]
     plum_model_name: mistral-large-2512
     plum_model_alias: mistral-large
     bridge_cmd: /usr/local/bin/vibe-acp-bridge
@@ -63,6 +65,62 @@
         owner: root
         group: root
         mode: "0755"
+
+    - name: Script that exposes each developer's git repositories read-only in his Plum workspace
+      ansible.builtin.copy:
+        src: "{{ chat_src }}/lumiether-expose-repos.sh"
+        dest: /usr/local/sbin/lumiether-expose-repos
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: systemd service for it
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/lumiether-expose-repos.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by lumi-playbooks (configure_plum_readonly.yml)
+          [Unit]
+          Description=Expose developers' git repositories read-only in their Plum workspace
+          After=local-fs.target
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/sbin/lumiether-expose-repos {{ plum_repo_users | join(' ') }}
+
+    - name: systemd timer for it (30 s after boot, then every minute, so a new clone appears within a minute)
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/lumiether-expose-repos.timer
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by lumi-playbooks (configure_plum_readonly.yml)
+          [Unit]
+          Description=Expose developers' git repositories every minute
+
+          [Timer]
+          OnBootSec=30
+          OnUnitActiveSec=60
+          AccuracySec=5
+
+          [Install]
+          WantedBy=timers.target
+      register: expose_timer
+
+    - name: Enable the timer and run it once now
+      ansible.builtin.systemd:
+        name: lumiether-expose-repos.timer
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Run the script once now
+      ansible.builtin.command: /usr/local/sbin/lumiether-expose-repos {{ plum_repo_users | join(' ') }}
+      changed_when: false
+      when: not ansible_check_mode
 
     - name: Summary
       ansible.builtin.debug:
