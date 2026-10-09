@@ -1,28 +1,50 @@
 #!/bin/bash
-# lumi-preview: serve a folder on 127.0.0.1 only, in the background. Reach it through VS Code's forwarded port.
+# lumi-preview: serve a folder on 127.0.0.1 only, in the background.
+# Every developer has five fixed ports (from the Linux user ID), so VS Code can forward them once.
 set -u
-STATE="${XDG_RUNTIME_DIR:-/tmp}/lumi-preview-$(id -u)"
-mkdir -p "$STATE"
-if [ "${1:-}" = "--stop" ]; then
-  for f in "$STATE"/*.pid; do
-    [ -e "$f" ] || continue
-    kill "$(cat "$f")" 2>/dev/null && echo "stopped preview on port $(basename "$f" .pid)"
-    rm -f "$f"
-  done
-  exit 0
+UIDN=$(id -u)
+BASE=$((8600 + 5 * (UIDN - 1000)))
+if [ "$UIDN" -lt 1000 ] || [ "$BASE" -gt 8995 ]; then
+  echo "no preview ports are assigned to this account" >&2; exit 1
 fi
+PORTS=$(seq "$BASE" $((BASE + 4)) | tr '\n' ' ')
+STATE="${XDG_RUNTIME_DIR:-/tmp}/lumi-preview-$UIDN"
+mkdir -p "$STATE"
+case "${1:-}" in
+  --ports)  echo "Your preview ports: $PORTS"; exit 0;;
+  --vscode)
+    echo "Add this to VS Code user settings (Preferences: Open User Settings (JSON)):"
+    echo '"remote.SSH.defaultForwardedPorts": ['
+    n=0
+    for p in $PORTS; do
+      n=$((n + 1)); sep=","; [ "$n" -eq 5 ] && sep=""
+      echo "  { \"name\": \"lumi-preview-$n\", \"localPort\": $p, \"remotePort\": $p }$sep"
+    done
+    echo ']'
+    exit 0;;
+  --status)
+    for p in $PORTS; do
+      if ss -ltn "sport = :$p" | grep -q LISTEN; then echo "port $p: in use"; else echo "port $p: free"; fi
+    done; exit 0;;
+  --stop)
+    for f in "$STATE"/*.pid; do
+      [ -e "$f" ] || continue
+      kill "$(cat "$f")" 2>/dev/null && echo "stopped preview on port $(basename "$f" .pid)"
+      rm -f "$f"
+    done; exit 0;;
+esac
 DIR="${1:-.}"
 [ -d "$DIR" ] || { echo "no such folder: $DIR" >&2; exit 1; }
 DIR=$(cd "$DIR" && pwd)
 PORT=""
-for p in $(seq 8700 8999); do
+for p in $PORTS; do
   if ! ss -ltn "sport = :$p" | grep -q LISTEN; then PORT=$p; break; fi
 done
-[ -n "$PORT" ] || { echo "no free port in 8700-8999" >&2; exit 1; }
+[ -n "$PORT" ] || { echo "all five of your preview ports ($PORTS) are in use. Free them with: lumi-preview --stop" >&2; exit 1; }
 setsid nohup python3 -m http.server "$PORT" --bind 127.0.0.1 --directory "$DIR" </dev/null >"$STATE/$PORT.log" 2>&1 &
 echo $! > "$STATE/$PORT.pid"
 sleep 1
 kill -0 "$(cat "$STATE/$PORT.pid")" 2>/dev/null || { echo "server failed to start, see $STATE/$PORT.log" >&2; exit 1; }
 echo "Serving $DIR on 127.0.0.1:$PORT"
-echo "Open: http://localhost:$PORT/<file name>  (VS Code forwards the port; see the Ports tab)"
+echo "Open: http://localhost:$PORT/<file name>  (VS Code forwards your preview ports; if $PORT is not in the Ports tab, click Add Port and enter $PORT)"
 echo "WARNING: this serves the whole folder $DIR, not just one page. It is reachable only through VS Code's forwarded port, not from the network. Stop it with: lumi-preview --stop"
