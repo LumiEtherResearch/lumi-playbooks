@@ -12,7 +12,7 @@
   hosts: "{{ target | default('all') }}"
   become: true
   vars:
-    lumiether_users: [abhi, anish, node-1]
+    lumiether_users: [abhi, anish, arun, node-1]
     vibe_venv: /opt/mistral-vibe
     astgrep_version: "0.45.3"
     install_cbm: true          # false = skip the Codebase Memory installer

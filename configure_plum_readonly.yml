@@ -14,7 +14,7 @@
   vars:
     plum_ro_users: [abhi, anish, node-1]
     # developers whose git repositories (top level of their home) appear read-only in their own Plum workspace
-    plum_repo_users: [abhi, anish]
+    plum_repo_users: [abhi, anish, arun]
     plum_model_name: mistral-large-2512
     plum_model_alias: mistral-large
     bridge_cmd: /usr/local/bin/vibe-acp-bridge

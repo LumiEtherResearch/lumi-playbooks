@@ -10,6 +10,7 @@
     plum_devs:
       - { name: abhi,  ip: 172.20.10.11 }
       - { name: anish, ip: 172.20.10.12 }
+      - { name: arun,  ip: 172.20.10.13 }
     container_uid: 1000          # the "node" user inside the Plum image
     container_gid: 1000
     bridge_host: 172.20.0.1      # docker gateway of the coding-agent network, where sshd is reached
