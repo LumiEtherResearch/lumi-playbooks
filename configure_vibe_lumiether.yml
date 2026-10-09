@@ -73,6 +73,12 @@
         dest: "{{ lumiether_lib }}/merge-config.py"
         mode: "0755"
 
+    - name: Preview helper (serves a folder on localhost only)
+      ansible.builtin.copy:
+        src: "{{ lumiether_src }}/lumi-preview"
+        dest: /usr/local/bin/lumi-preview
+        mode: "0755"
+
     - name: Per-user setup
       ansible.builtin.include_tasks: tasks/lumiether_user.yml
       loop: "{{ lumiether_users }}"

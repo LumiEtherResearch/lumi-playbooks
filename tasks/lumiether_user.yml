@@ -40,7 +40,14 @@
         mode: "0600"
       loop:
         - { src: agents/lumiether.toml, dest: agents/lumiether.toml }
-        - { src: prompts/lumiether-codebase-first.md, dest: prompts/lumiether-codebase-first.md }
+
+    - name: "{{ lu }}: lumiether prompt (codebase-first plus the preview rule)"
+      ansible.builtin.copy:
+        content: "{{ lookup('file', lumiether_src ~ '/prompts/lumiether-codebase-first.md') }}\n\n{{ lookup('file', lumiether_src ~ '/prompts/lumiether-preview.md') }}\n"
+        dest: "{{ lu_home }}/.vibe/prompts/lumiether-codebase-first.md"
+        owner: "{{ lu }}"
+        group: "{{ lu }}"
+        mode: "0600"
 
     - name: "{{ lu }}: is the config merger installed?"
       ansible.builtin.stat:

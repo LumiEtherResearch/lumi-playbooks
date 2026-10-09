@@ -1,0 +1,28 @@
+#!/bin/bash
+# lumi-preview: serve a folder on 127.0.0.1 only, in the background. Reach it through VS Code's forwarded port.
+set -u
+STATE="${XDG_RUNTIME_DIR:-/tmp}/lumi-preview-$(id -u)"
+mkdir -p "$STATE"
+if [ "${1:-}" = "--stop" ]; then
+  for f in "$STATE"/*.pid; do
+    [ -e "$f" ] || continue
+    kill "$(cat "$f")" 2>/dev/null && echo "stopped preview on port $(basename "$f" .pid)"
+    rm -f "$f"
+  done
+  exit 0
+fi
+DIR="${1:-.}"
+[ -d "$DIR" ] || { echo "no such folder: $DIR" >&2; exit 1; }
+DIR=$(cd "$DIR" && pwd)
+PORT=""
+for p in $(seq 8700 8999); do
+  if ! ss -ltn "sport = :$p" | grep -q LISTEN; then PORT=$p; break; fi
+done
+[ -n "$PORT" ] || { echo "no free port in 8700-8999" >&2; exit 1; }
+setsid nohup python3 -m http.server "$PORT" --bind 127.0.0.1 --directory "$DIR" </dev/null >"$STATE/$PORT.log" 2>&1 &
+echo $! > "$STATE/$PORT.pid"
+sleep 1
+kill -0 "$(cat "$STATE/$PORT.pid")" 2>/dev/null || { echo "server failed to start, see $STATE/$PORT.log" >&2; exit 1; }
+echo "Serving $DIR on 127.0.0.1:$PORT"
+echo "Open: http://localhost:$PORT/<file name>  (VS Code forwards the port; see the Ports tab)"
+echo "WARNING: this serves the whole folder $DIR, not just one page. It is reachable only through VS Code's forwarded port, not from the network. Stop it with: lumi-preview --stop"
