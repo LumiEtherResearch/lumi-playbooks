@@ -3,7 +3,7 @@
   hosts: all
   become: true
   vars:
-    flutter_ref: stable          # pin to an exact tag once installed, e.g. 3.xx.x
+    flutter_ref: 3.29.0
     flutter_dir: /opt/flutter
     android_home: /opt/android-sdk
     java_major: 21
