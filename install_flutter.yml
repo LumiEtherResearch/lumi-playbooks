@@ -40,6 +40,11 @@
       register: safe_dir
       changed_when: "'ADDED' in safe_dir.stdout"
 
+    - name: Download the Dart SDK and web tooling once (as root, perms fixed below)
+      ansible.builtin.command: "{{ flutter_dir }}/bin/flutter precache --web"
+      environment: { HOME: /root }
+      changed_when: false
+
     - name: Group-writable so the SDK can update its cache
       ansible.builtin.file:
         path: "{{ flutter_dir }}"
@@ -61,8 +66,3 @@
           export FLUTTER_SUPPRESS_ANALYTICS=true
           export DART_SUPPRESS_ANALYTICS=true
 
-    - name: Download the Dart SDK and web tooling once
-      ansible.builtin.command: "{{ flutter_dir }}/bin/flutter precache --web"
-      become_user: node-1
-      environment: { HOME: /home/node-1 }
-      changed_when: false
