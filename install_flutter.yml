@@ -1,0 +1,68 @@
+---
+- name: Install Flutter (includes Dart) for all developers
+  hosts: all
+  become: true
+  vars:
+    flutter_ref: stable          # pin to an exact tag once installed, e.g. 3.xx.x
+    flutter_dir: /opt/flutter
+    flutter_users: [abhi, anish, arun, node-1]
+  tasks:
+    - name: System packages Flutter needs
+      ansible.builtin.apt:
+        name: [git, curl, unzip, xz-utils, zip, libglu1-mesa]
+        state: present
+        update_cache: true
+
+    - name: Shared group for Flutter users
+      ansible.builtin.group:
+        name: flutter
+        state: present
+
+    - name: Add developers to the group
+      ansible.builtin.user:
+        name: "{{ item }}"
+        groups: flutter
+        append: true
+      loop: "{{ flutter_users }}"
+
+    - name: Clone Flutter
+      ansible.builtin.git:
+        repo: https://github.com/flutter/flutter.git
+        dest: "{{ flutter_dir }}"
+        version: "{{ flutter_ref }}"
+        depth: 1
+        force: false
+
+    - name: Allow every user to use the shared checkout
+      community.general.git_config:
+        scope: system
+        name: safe.directory
+        value: "{{ flutter_dir }}"
+        add_mode: add
+
+    - name: Group-writable so the SDK can update its cache
+      ansible.builtin.file:
+        path: "{{ flutter_dir }}"
+        owner: root
+        group: flutter
+        mode: "g+rwX"
+        recurse: true
+
+    - name: Set setgid on directories
+      ansible.builtin.command: find {{ flutter_dir }} -type d -exec chmod g+s {} +
+      changed_when: false
+
+    - name: Put flutter and dart on PATH for login shells
+      ansible.builtin.copy:
+        dest: /etc/profile.d/flutter.sh
+        mode: "0644"
+        content: |
+          export PATH="$PATH:{{ flutter_dir }}/bin"
+          export FLUTTER_SUPPRESS_ANALYTICS=true
+          export DART_SUPPRESS_ANALYTICS=true
+
+    - name: Download the Dart SDK and web tooling once
+      ansible.builtin.command: "{{ flutter_dir }}/bin/flutter precache --web"
+      become_user: node-1
+      environment: { HOME: /home/node-1 }
+      changed_when: false
