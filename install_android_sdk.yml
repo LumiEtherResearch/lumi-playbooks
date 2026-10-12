@@ -5,6 +5,7 @@
   vars:
     java_major: 21
     android_home: /opt/android-sdk
+    sdk_packages: ["platforms;android-36", "build-tools;37.0.0"]
     cmdtools_zip: https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
   tasks:
     - name: JDK, unzip and adb
@@ -52,6 +53,15 @@
         JAVA_HOME: "/usr/lib/jvm/java-{{ java_major }}-openjdk-amd64"
       args:
         creates: "{{ android_home }}/licenses/android-sdk-license"
+
+    - name: Install pinned platform and build-tools (group-writable)
+      ansible.builtin.shell: |
+        umask 002
+        yes | {{ android_home }}/cmdline-tools/latest/bin/sdkmanager --sdk_root={{ android_home }} {{ sdk_packages | join(' ') }}
+      environment:
+        JAVA_HOME: "/usr/lib/jvm/java-{{ java_major }}-openjdk-amd64"
+      args:
+        creates: "{{ android_home }}/build-tools/37.0.0"
 
     - name: Group-writable so Gradle can add build tools
       ansible.builtin.file:
