@@ -1,0 +1,66 @@
+---
+- name: Install JDK and Android SDK for Flutter Android builds (shared, /opt)
+  hosts: all
+  become: true
+  vars:
+    java_major: 21
+    android_home: /opt/android-sdk
+    cmdtools_zip: https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+  tasks:
+    - name: JDK, unzip and adb
+      ansible.builtin.apt:
+        name: ["openjdk-{{ java_major }}-jdk-headless", unzip, android-tools-adb]
+        state: present
+
+    - name: Shared group exists
+      ansible.builtin.group: { name: flutter, state: present }
+
+    - name: SDK folders
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: flutter
+        mode: "2775"
+      loop: ["{{ android_home }}", "{{ android_home }}/cmdline-tools", "{{ android_home }}/platform-tools"]
+
+    - name: Download command-line tools
+      ansible.builtin.get_url:
+        url: "{{ cmdtools_zip }}"
+        dest: /tmp/cmdline-tools.zip
+        mode: "0644"
+
+    - name: Unpack into cmdline-tools/latest
+      ansible.builtin.shell: |
+        set -e
+        rm -rf /tmp/cmdtools && mkdir /tmp/cmdtools
+        unzip -q /tmp/cmdline-tools.zip -d /tmp/cmdtools
+        mv /tmp/cmdtools/cmdline-tools "{{ android_home }}/cmdline-tools/latest"
+      args:
+        creates: "{{ android_home }}/cmdline-tools/latest/bin/sdkmanager"
+
+    - name: Use the system adb (avoids a second adb dropping the phone connection)
+      ansible.builtin.file:
+        src: /usr/bin/adb
+        dest: "{{ android_home }}/platform-tools/adb"
+        state: link
+
+    - name: Accept Android SDK licenses for the team
+      ansible.builtin.shell: >
+        yes | {{ android_home }}/cmdline-tools/latest/bin/sdkmanager --sdk_root={{ android_home }} --licenses
+      environment:
+        JAVA_HOME: "/usr/lib/jvm/java-{{ java_major }}-openjdk-amd64"
+      args:
+        creates: "{{ android_home }}/licenses/android-sdk-license"
+
+    - name: Group-writable so Gradle can add build tools
+      ansible.builtin.file:
+        path: "{{ android_home }}"
+        owner: root
+        group: flutter
+        mode: "g+rwX"
+        recurse: true
+
+    - name: setgid on directories
+      ansible.builtin.command: find {{ android_home }} -type d -exec chmod g+s {} +
+      changed_when: false

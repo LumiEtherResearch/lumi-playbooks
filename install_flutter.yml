@@ -5,6 +5,8 @@
   vars:
     flutter_ref: stable          # pin to an exact tag once installed, e.g. 3.xx.x
     flutter_dir: /opt/flutter
+    android_home: /opt/android-sdk
+    java_major: 21
     flutter_users: [abhi, anish, arun, node-1]
   tasks:
     - name: System packages Flutter needs
@@ -73,5 +75,8 @@
         content: |
           #!/bin/sh
           umask 002
+          export JAVA_HOME="${JAVA_HOME:-$(ls -d /usr/lib/jvm/java-{{ java_major }}-openjdk-* 2>/dev/null | head -1)}"
+          export ANDROID_HOME="{{ android_home }}"
+          export ANDROID_SDK_ROOT="{{ android_home }}"
           exec {{ flutter_dir }}/bin/{{ item }} "$@"
       loop: [flutter, dart]
