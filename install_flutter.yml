@@ -66,3 +66,12 @@
           export FLUTTER_SUPPRESS_ANALYTICS=true
           export DART_SUPPRESS_ANALYTICS=true
 
+    - name: Wrappers so every flutter/dart run creates group-writable files
+      ansible.builtin.copy:
+        dest: "/usr/local/bin/{{ item }}"
+        mode: "0755"
+        content: |
+          #!/bin/sh
+          umask 002
+          exec {{ flutter_dir }}/bin/{{ item }} "$@"
+      loop: [flutter, dart]
