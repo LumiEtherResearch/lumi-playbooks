@@ -32,7 +32,6 @@
         repo: https://github.com/flutter/flutter.git
         dest: "{{ flutter_dir }}"
         version: "{{ flutter_ref }}"
-        depth: 1
         force: false
 
     - name: Allow every user to use the shared checkout
