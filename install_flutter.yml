@@ -34,11 +34,11 @@
         force: false
 
     - name: Allow every user to use the shared checkout
-      community.general.git_config:
-        scope: system
-        name: safe.directory
-        value: "{{ flutter_dir }}"
-        add_mode: add
+      ansible.builtin.shell: |
+        git config --system --get-all safe.directory | grep -qx "{{ flutter_dir }}" || {
+          git config --system --add safe.directory "{{ flutter_dir }}"; echo ADDED; }
+      register: safe_dir
+      changed_when: "'ADDED' in safe_dir.stdout"
 
     - name: Group-writable so the SDK can update its cache
       ansible.builtin.file:
