@@ -1,0 +1,64 @@
+---
+# Install the LumiEther engineering foundation (repo lumiether-engineering)
+# for host Vibe (each developer) and Plum (shared ~/.vibe-plum of node-1).
+#
+#   ansible-playbook configure_engineering_foundation.yml --check
+#   ansible-playbook configure_engineering_foundation.yml
+#
+# Read-only for developers: the repo is cloned by root into /opt.
+# Only marked blocks are added to AGENTS.md and config.toml; nothing else is touched.
+- name: LumiEther engineering foundation
+  hosts: "{{ target | default('all') }}"
+  become: true
+  vars:
+    eng_repo: git@github.com:LumiEther-Research/lumiether-engineering.git
+    eng_dir: /opt/lumiether-engineering
+    eng_key: /etc/lumiether/deploy-keys/engineering
+    eng_branch: main
+    eng_homes:
+      - { user: abhi,   home: /home/abhi/.vibe }
+      - { user: anish,  home: /home/anish/.vibe }
+      - { user: arun,   home: /home/arun/.vibe }
+      - { user: node-1, home: /home/node-1/.vibe }
+      - { user: node-1, home: /home/node-1/.vibe-plum }
+  tasks:
+    - name: Deploy key must exist
+      ansible.builtin.stat:
+        path: "{{ eng_key }}"
+      register: eng_key_stat
+      failed_when: not eng_key_stat.stat.exists
+
+    - name: Sync lumiether-engineering (read-only deploy key)
+      ansible.builtin.git:
+        repo: "{{ eng_repo }}"
+        dest: "{{ eng_dir }}"
+        version: "{{ eng_branch }}"
+        key_file: "{{ eng_key }}"
+        accept_hostkey: true
+        force: false
+
+    - name: Make the checkout readable, not writable, for developers
+      ansible.builtin.file:
+        path: "{{ eng_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "u=rwX,go=rX"
+        recurse: true
+      when: not ansible_check_mode
+
+    - name: Read the global AGENTS.md from the checkout
+      ansible.builtin.slurp:
+        src: "{{ eng_dir }}/agents/AGENTS.md"
+      register: eng_agents
+      failed_when: false
+
+    - name: Per-home setup
+      ansible.builtin.include_tasks: tasks/engineering_home.yml
+      loop: "{{ eng_homes }}"
+      loop_control:
+        loop_var: h
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: "{{ eng_report | default([]) }}"

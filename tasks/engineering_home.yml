@@ -1,0 +1,57 @@
+---
+# Included once per Vibe home (loop variable: h = {user, home}).
+- name: "{{ h.home }}: exists?"
+  ansible.builtin.stat:
+    path: "{{ h.home }}"
+  register: h_dir
+
+- name: "{{ h.home }}: apply"
+  when: h_dir.stat.exists
+  block:
+    - name: "{{ h.home }}: config.toml exists?"
+      ansible.builtin.stat:
+        path: "{{ h.home }}/config.toml"
+      register: h_cfg
+
+    - name: "{{ h.home }}: own skill_paths lines vs ours"
+      ansible.builtin.shell: |
+        echo "$(grep -c '^skill_paths' {{ h.home }}/config.toml 2>/dev/null || true)|$(grep -c 'BEGIN LUMIETHER ENGINEERING' {{ h.home }}/config.toml 2>/dev/null || true)"
+      register: h_count
+      changed_when: false
+      check_mode: false
+      when: h_cfg.stat.exists
+
+    - name: "{{ h.home }}: safe to add skill_paths?"
+      ansible.builtin.set_fact:
+        h_ok: "{{ h_cfg.stat.exists and ((h_count.stdout | trim).split('|')[0] | int(0)) == ((h_count.stdout | trim).split('|')[1] | int(0)) }}"
+
+    - name: "{{ h.home }}: skill_paths -> shared skills"
+      ansible.builtin.blockinfile:
+        path: "{{ h.home }}/config.toml"
+        insertbefore: BOF
+        marker: "# {mark} LUMIETHER ENGINEERING"
+        block: 'skill_paths = ["{{ eng_dir }}/skills"]'
+      when: h_ok | bool
+
+    - name: "{{ h.home }}: global AGENTS.md block (existing blocks kept)"
+      ansible.builtin.blockinfile:
+        path: "{{ h.home }}/AGENTS.md"
+        create: true
+        owner: "{{ h.user }}"
+        group: "{{ h.user }}"
+        marker: "<!-- lumiether-engineering:{mark} -->"
+        marker_begin: start
+        marker_end: end
+        block: "{{ eng_agents.content | b64decode }}"
+      when: eng_agents.content is defined
+
+    - name: "{{ h.home }}: record"
+      ansible.builtin.set_fact:
+        eng_report: >-
+          {{ eng_report | default([]) + [h.home ~ ': ' ~
+             ('configured' if h_ok | bool else 'SKIPPED skill_paths (no config.toml, or user already sets skill_paths)')] }}
+
+- name: "{{ h.home }}: not present"
+  ansible.builtin.set_fact:
+    eng_report: "{{ eng_report | default([]) + [h.home ~ ': SKIPPED (no such folder)'] }}"
+  when: not h_dir.stat.exists
