@@ -1,0 +1,23 @@
+---
+- name: LumiEther Workspace Map
+  hosts: "{{ target | default('all') }}"
+  become: true
+  vars_files:
+    - vars/workspace_map.yml
+  vars:
+    map_file: /srv/lumiether/workspace-map.json
+  tasks:
+    - name: Central mapping (Developer -> Project -> Workspace -> Branch)
+      ansible.builtin.copy:
+        content: "{{ workspace_map | to_nice_json }}\n"
+        dest: "{{ map_file }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Developer branches in the existing workspaces (from the current commit, nothing reset)
+      ansible.builtin.include_tasks: tasks/workspace_branch.yml
+      loop: "{{ workspace_map }}"
+      loop_control:
+        loop_var: e
+        label: "{{ e.developer }}/{{ e.project }}"

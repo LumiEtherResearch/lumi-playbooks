@@ -1,0 +1,14 @@
+---
+# Central mapping: Developer -> Project -> Workspace -> Git branch.
+# Project ids are lowercase (they are used as Engineering Memory and Plan Registry names).
+# Branch convention: <developer>_main (matches the branches already on GitHub).
+workspace_map:
+  - {developer: abhi,  project: ai-audio-traning,      workspace: /srv/lumiether/workspaces/abhi/Ai-audio-traning,      branch: abhi_main}
+  - {developer: abhi,  project: caymas-flutter-web,    workspace: /srv/lumiether/workspaces/abhi/caymas-flutter-web,    branch: abhi_main}
+  - {developer: abhi,  project: quarkus-auth,          workspace: /srv/lumiether/workspaces/abhi/quarkus-auth,          branch: abhi_main}
+  - {developer: abhi,  project: quarkus-mobile,        workspace: /srv/lumiether/workspaces/abhi/quarkus-mobile,        branch: abhi_main}
+  - {developer: anish, project: caymas-flutter-mobile, workspace: /srv/lumiether/workspaces/anish/caymas-flutter-mobile, branch: anish_main}
+  - {developer: anish, project: caymas-flutter-web,    workspace: /srv/lumiether/workspaces/anish/caymas-flutter-web,    branch: anish_main}
+  - {developer: anish, project: quarkus-auth,          workspace: /srv/lumiether/workspaces/anish/quarkus-auth,          branch: anish_main}
+  - {developer: anish, project: quarkus-mobile,        workspace: /srv/lumiether/workspaces/anish/quarkus-mobile,        branch: anish_main}
+  - {developer: anish, project: quarkus-web,           workspace: /srv/lumiether/workspaces/anish/quarkus-web,           branch: anish_main}

@@ -15,11 +15,25 @@ MAX = 256 * 1024
 NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$")
 PATH = re.compile(r"^[A-Za-z0-9._@+-][A-Za-z0-9._@+/*-]{0,199}$")
+MAP = "/srv/lumiether/workspace-map.json"
 
 
 def die(msg, code=2):
     sys.stderr.write("lumi-plan-register: %s\n" % msg)
     sys.exit(code)
+
+
+def lookup(user, project):
+    """Return the central workspace-map entry for this developer and project."""
+    try:
+        with open(MAP, encoding="utf-8") as f:
+            entries = json.load(f)
+    except (OSError, ValueError):
+        die("central workspace map is missing or unreadable; ask an admin")
+    for e in entries:
+        if e.get("developer") == user and e.get("project") == project:
+            return e
+    die("no workspace is mapped to %s for project %s" % (user, project))
 
 
 def main():
@@ -38,6 +52,9 @@ def main():
     user = os.environ.get("SUDO_USER")
     if not user or user == "root":
         die("must be run through sudo by a developer")
+    entry = lookup(user, project)
+    if branch != entry["branch"]:
+        die("branch for %s on %s must be %s (central workspace map)" % (user, project, entry["branch"]))
     raw = sys.stdin.buffer.read(MAX + 1)
     if not raw.strip():
         die("empty prompt on stdin")
@@ -64,6 +81,7 @@ def main():
             "layer": layer,
             "developer": user,
             "branch": branch,
+            "workspace": entry["workspace"],
             "permitted_paths": paths,
             "prompt": final,
             "prompt_sha256": sha,

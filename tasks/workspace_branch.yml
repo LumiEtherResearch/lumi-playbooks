@@ -1,0 +1,40 @@
+---
+# Included once per mapping entry (loop variable: e).
+- name: "{{ e.developer }}/{{ e.project }}: is the workspace a git clone?"
+  ansible.builtin.stat:
+    path: "{{ e.workspace }}/.git"
+  register: ws_git
+
+- name: "{{ e.developer }}/{{ e.project }}: who owns the workspace?"
+  ansible.builtin.stat:
+    path: "{{ e.workspace }}"
+  register: ws_dir
+  when: ws_git.stat.exists
+
+- name: "{{ e.developer }}/{{ e.project }}: branch {{ e.branch }}"
+  become_user: "{{ e.developer }}"
+  ansible.builtin.shell: |
+    cd "{{ e.workspace }}" || { echo "FAILED: cannot enter workspace"; exit 0; }
+    cur=$(git branch --show-current)
+    if [ "$cur" = "{{ e.branch }}" ]; then
+      echo "ok: already on {{ e.branch }}"
+    elif git rev-parse --verify --quiet "refs/heads/{{ e.branch }}" >/dev/null; then
+      if git switch "{{ e.branch }}" >/dev/null 2>&1; then echo "switched to {{ e.branch }} (was $cur)"; else echo "FAILED: could not switch to existing {{ e.branch }} (local changes would be overwritten)"; fi
+    else
+      if git switch -c "{{ e.branch }}" >/dev/null 2>&1; then echo "created {{ e.branch }} from $cur"; else echo "FAILED: could not create {{ e.branch }}"; fi
+    fi
+    if git rev-parse --verify --quiet "refs/remotes/origin/{{ e.branch }}" >/dev/null; then
+      echo "origin/{{ e.branch }} vs local (ahead behind): $(git rev-list --left-right --count HEAD...origin/{{ e.branch }} 2>/dev/null)"
+    fi
+  register: ws_branch
+  changed_when: "'created ' in ws_branch.stdout or 'switched ' in ws_branch.stdout"
+  when: ws_git.stat.exists and ws_dir.stat.pw_name == e.developer
+
+- name: "{{ e.developer }}/{{ e.project }}: result"
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'check mode: nothing changed' if ansible_check_mode
+         else (ws_branch.stdout_lines
+               if (ws_branch.stdout_lines is defined)
+               else ('SKIPPED: no git clone at ' ~ e.workspace if not ws_git.stat.exists
+                     else 'SKIPPED: clone is owned by ' ~ ws_dir.stat.pw_name ~ ', not ' ~ e.developer)) }}
