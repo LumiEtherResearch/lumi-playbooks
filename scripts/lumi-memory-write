@@ -1,0 +1,80 @@
+#!/usr/bin/python3 -I
+"""lumi-memory-write PROJECT FEATURE LAYER   (markdown on stdin)
+
+Trusted, narrowly scoped writer for LUMIANS Engineering Memory.
+Runs as root through sudo. It can only write
+  <ROOT>/<project>/features/<feature>/<layer>.md
+and keeps the previous version and an audit line for every write.
+"""
+import hashlib
+import json
+import os
+import re
+import sys
+import time
+
+ROOT = "/srv/lumiether/engineering-memory"
+AUDIT = ROOT + "/.audit.log"
+MAX_BYTES = 256 * 1024
+NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+
+def die(msg, code=2):
+    print(f"lumi-memory-write: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def main():
+    if len(sys.argv) != 4:
+        die("usage: lumi-memory-write PROJECT FEATURE LAYER < content.md")
+    project, feature, layer = sys.argv[1:]
+    for label, value in (("project", project), ("feature", feature), ("layer", layer)):
+        if not NAME.match(value) or ".." in value:
+            die(f"invalid {label} {value!r}: use lowercase letters, digits, '.', '_' or '-'")
+    who = os.environ.get("SUDO_USER")
+    if not who:
+        die("must be run through sudo by a developer")
+
+    data = sys.stdin.buffer.read(MAX_BYTES + 1)
+    if not data.strip():
+        die("empty content, nothing written")
+    if len(data) > MAX_BYTES:
+        die("content too large (max 256 KB)")
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError:
+        die("content must be UTF-8 text")
+
+    os.umask(0o022)
+    folder = f"{ROOT}/{project}/features/{feature}"
+    os.makedirs(folder, mode=0o755, exist_ok=True)
+    if not os.path.realpath(folder).startswith(ROOT + "/"):
+        die("path escapes the Engineering Memory folder")
+
+    target = f"{folder}/{layer}.md"
+    stamp = time.strftime("%Y%m%dT%H%M%S")
+    if os.path.exists(target):
+        hist = f"{folder}/.history"
+        os.makedirs(hist, mode=0o755, exist_ok=True)
+        with open(target, "rb") as old, open(f"{hist}/{layer}.{stamp}.md", "wb") as keep:
+            keep.write(old.read())
+
+    tmp = f"{folder}/.{layer}.md.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(data)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, target)
+
+    line = json.dumps({
+        "time": stamp, "user": who, "project": project, "feature": feature,
+        "layer": layer, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+    })
+    fd = os.open(AUDIT, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    with os.fdopen(fd, "a") as fh:
+        fh.write(line + "\n")
+    print(f"written: {target} ({len(data)} bytes)")
+
+
+main()

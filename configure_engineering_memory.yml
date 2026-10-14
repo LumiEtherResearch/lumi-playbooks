@@ -1,0 +1,64 @@
+---
+# Engineering Memory: the central folder and the one narrow writer command.
+#
+#   ansible-playbook configure_engineering_memory.yml --check
+#   ansible-playbook configure_engineering_memory.yml
+#
+# The folder is root-owned and world-readable. Developers (group lumi-dev) can write
+# only through `sudo lumi-memory-write PROJECT FEATURE LAYER < file.md`.
+- name: LumiEther Engineering Memory
+  hosts: "{{ target | default('all') }}"
+  become: true
+  vars:
+    mem_root: /srv/lumiether/engineering-memory
+    mem_group: lumi-dev
+    mem_users: [abhi, anish, arun, node-1]
+    mem_writer: /usr/local/bin/lumi-memory-write
+  tasks:
+    - name: Developer group
+      ansible.builtin.group:
+        name: "{{ mem_group }}"
+        state: present
+
+    - name: Developers are members (added, nothing else changed)
+      ansible.builtin.user:
+        name: "{{ item }}"
+        groups: "{{ mem_group }}"
+        append: true
+      loop: "{{ mem_users }}"
+
+    - name: Central folder (root-owned, readable by everyone)
+      ansible.builtin.file:
+        path: "{{ mem_root }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Audit log (created once, never reset)
+      ansible.builtin.copy:
+        content: ""
+        dest: "{{ mem_root }}/.audit.log"
+        force: false
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: The writer command
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/scripts/lumi-memory-write"
+        dest: "{{ mem_writer }}"
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Developers may run that one command as root, nothing else
+      ansible.builtin.copy:
+        content: |
+          # Managed by lumi-playbooks (configure_engineering_memory.yml)
+          %{{ mem_group }} ALL=(root) NOPASSWD: {{ mem_writer }}
+        dest: /etc/sudoers.d/lumiether-memory
+        owner: root
+        group: root
+        mode: "0440"
+        validate: /usr/sbin/visudo -cf %s
