@@ -26,6 +26,7 @@
         groups: "{{ mem_group }}"
         append: true
       loop: "{{ mem_users }}"
+      ignore_errors: "{{ ansible_check_mode }}"  # in check mode the group is not created yet
 
     - name: Central folder (root-owned, readable by everyone)
       ansible.builtin.file:
