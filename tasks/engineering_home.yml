@@ -13,24 +13,43 @@
         path: "{{ h.home }}/config.toml"
       register: h_cfg
 
-    - name: "{{ h.home }}: own skill_paths lines vs ours"
+    - name: "{{ h.home }}: skill_paths/agent_paths lines the user owns (outside our block)"
       ansible.builtin.shell: |
-        echo "$(grep -c '^skill_paths' {{ h.home }}/config.toml 2>/dev/null || true)|$(grep -c 'BEGIN LUMIETHER ENGINEERING' {{ h.home }}/config.toml 2>/dev/null || true)"
+        sed '/BEGIN LUMIETHER ENGINEERING/,/END LUMIETHER ENGINEERING/d' {{ h.home }}/config.toml | grep -c -E '^(skill_paths|agent_paths)' || true
       register: h_count
       changed_when: false
       check_mode: false
       when: h_cfg.stat.exists
 
-    - name: "{{ h.home }}: safe to add skill_paths?"
+    - name: "{{ h.home }}: safe to add skill_paths and agent_paths?"
       ansible.builtin.set_fact:
-        h_ok: "{{ h_cfg.stat.exists and ((h_count.stdout | trim).split('|')[0] | int(0)) == ((h_count.stdout | trim).split('|')[1] | int(0)) }}"
+        h_ok: "{{ h_cfg.stat.exists and ((h_count.stdout | trim) | int(1)) == 0 }}"
 
-    - name: "{{ h.home }}: skill_paths -> shared skills"
+    - name: "{{ h.home }}: skill_paths and agent_paths -> shared skills and agent profiles"
       ansible.builtin.blockinfile:
         path: "{{ h.home }}/config.toml"
         insertbefore: BOF
         marker: "# {mark} LUMIETHER ENGINEERING"
-        block: 'skill_paths = ["{{ eng_dir }}/skills"]'
+        block: |
+          skill_paths = ["{{ eng_dir }}/skills"]
+          agent_paths = ["{{ eng_dir }}/agent-profiles"]
+      when: h_ok | bool
+
+    - name: "{{ h.home }}: agent profile prompts available"
+      ansible.builtin.find:
+        paths: "{{ eng_dir }}/agent-profiles/prompts"
+        patterns: "*.md"
+      register: h_prompts
+      when: h_ok | bool
+
+    - name: "{{ h.home }}: link agent profile prompts into prompts/"
+      ansible.builtin.file:
+        src: "{{ item.path }}"
+        dest: "{{ h.home }}/prompts/{{ item.path | basename }}"
+        state: link
+      loop: "{{ h_prompts.files | default([]) }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
       when: h_ok | bool
 
     - name: "{{ h.home }}: global AGENTS.md block (existing blocks kept)"
@@ -49,7 +68,7 @@
       ansible.builtin.set_fact:
         eng_report: >-
           {{ eng_report | default([]) + [h.home ~ ': ' ~
-             ('configured' if h_ok | bool else 'SKIPPED skill_paths (no config.toml, or user already sets skill_paths)')] }}
+             ('configured' if h_ok | bool else 'SKIPPED (no config.toml, or user already sets skill_paths/agent_paths)')] }}
 
 - name: "{{ h.home }}: not present"
   ansible.builtin.set_fact:
