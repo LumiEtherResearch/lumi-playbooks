@@ -1,0 +1,42 @@
+---
+- name: LumiEther Plan Registry
+  hosts: "{{ target | default('all') }}"
+  become: true
+  vars:
+    reg_root: /srv/lumiether/plan-registry
+    reg_group: lumi-dev
+    reg_writer: /usr/local/bin/lumi-plan-register
+  tasks:
+    - name: Central folder (root-owned, readable by everyone)
+      ansible.builtin.file:
+        path: "{{ reg_root }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Audit log
+      ansible.builtin.copy:
+        content: ""
+        dest: "{{ reg_root }}/.audit.log"
+        force: false
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Writer script (the only way to register a plan)
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/scripts/lumi-plan-register"
+        dest: "{{ reg_writer }}"
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Developers may run only the writer through sudo
+      ansible.builtin.copy:
+        dest: /etc/sudoers.d/lumiether-plans
+        content: "%{{ reg_group }} ALL=(root) NOPASSWD: {{ reg_writer }}\n"
+        owner: root
+        group: root
+        mode: "0440"
+        validate: /usr/sbin/visudo -cf %s

@@ -1,0 +1,100 @@
+#!/usr/bin/python3 -I
+"""Register an approved plan in the central Plan Registry.
+
+Usage (through sudo):
+  lumi-plan-register PROJECT FEATURE LAYER BRANCH PATH [PATH ...] < final-prompt.md
+
+Generates the Plan ID, puts it at the top of the prompt, stores one JSON file per plan.
+"""
+import hashlib, json, os, re, secrets, sys
+from datetime import datetime, timezone
+
+ROOT = "/srv/lumiether/plan-registry"
+AUDIT = ROOT + "/.audit.log"
+MAX = 256 * 1024
+NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$")
+PATH = re.compile(r"^[A-Za-z0-9._@+-][A-Za-z0-9._@+/*-]{0,199}$")
+
+
+def die(msg, code=2):
+    sys.stderr.write("lumi-plan-register: %s\n" % msg)
+    sys.exit(code)
+
+
+def main():
+    if len(sys.argv) < 6:
+        die("usage: lumi-plan-register PROJECT FEATURE LAYER BRANCH PATH [PATH ...] < final-prompt.md")
+    project, feature, layer, branch = sys.argv[1:5]
+    paths = sys.argv[5:]
+    for label, v in (("project", project), ("feature", feature), ("layer", layer)):
+        if not NAME.match(v) or ".." in v:
+            die("bad %s name" % label)
+    if not BRANCH.match(branch) or ".." in branch or "//" in branch or branch.endswith(("/", ".lock")):
+        die("bad branch name")
+    for p in paths:
+        if not PATH.match(p) or ".." in p.split("/"):
+            die("bad path (relative paths only, no '..'): %s" % p)
+    user = os.environ.get("SUDO_USER")
+    if not user or user == "root":
+        die("must be run through sudo by a developer")
+    raw = sys.stdin.buffer.read(MAX + 1)
+    if not raw.strip():
+        die("empty prompt on stdin")
+    if len(raw) > MAX:
+        die("prompt larger than 256KB")
+    try:
+        body = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        die("prompt is not UTF-8")
+    if "\x00" in body:
+        die("prompt contains NUL")
+
+    os.umask(0o022)
+    os.makedirs(ROOT, mode=0o755, exist_ok=True)
+    now = datetime.now(timezone.utc)
+    for _ in range(8):
+        plan_id = "PLAN-%s-%s" % (now.strftime("%Y%m%d"), secrets.token_hex(3).upper())
+        final = "Plan ID: %s\n\n%s\n" % (plan_id, body.strip("\n"))
+        sha = hashlib.sha256(final.encode("utf-8")).hexdigest()
+        record = {
+            "plan_id": plan_id,
+            "project": project,
+            "feature": feature,
+            "layer": layer,
+            "developer": user,
+            "branch": branch,
+            "permitted_paths": paths,
+            "prompt": final,
+            "prompt_sha256": sha,
+            "approver": user,
+            "approved_at": now.isoformat(timespec="seconds"),
+            "status": "approved",
+            "commits": [],
+        }
+        target = "%s/%s.json" % (ROOT, plan_id)
+        tmp = "%s/.tmp-%s" % (ROOT, secrets.token_hex(6))
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(record, f, indent=2)
+            f.write("\n")
+        try:
+            os.link(tmp, target)  # fails if the ID already exists
+        except FileExistsError:
+            os.unlink(tmp)
+            continue
+        os.unlink(tmp)
+        break
+    else:
+        die("could not allocate a Plan ID", 1)
+
+    with open(AUDIT, "a", encoding="utf-8") as a:
+        a.write(json.dumps({
+            "time": now.isoformat(timespec="seconds"), "user": user, "plan_id": plan_id,
+            "project": project, "feature": feature, "layer": layer, "branch": branch, "sha256": sha,
+        }) + "\n")
+    print("registered: %s (sha256 %s)" % (plan_id, sha))
+    print("---- final prompt (copy this into VS Code/Vibe) ----")
+    sys.stdout.write(final)
+
+
+main()
