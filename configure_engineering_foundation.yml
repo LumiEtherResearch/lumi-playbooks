@@ -21,6 +21,9 @@
       - { user: arun,   home: /home/arun/.vibe }
       - { user: node-1, home: /home/node-1/.vibe }
       - { user: node-1, home: /home/node-1/.vibe-plum }
+      - { user: abhi,   home: /home/abhi/.vibe-plum }
+      - { user: anish,  home: /home/anish/.vibe-plum }
+      - { user: arun,   home: /home/arun/.vibe-plum }
   tasks:
     - name: Deploy key must exist
       ansible.builtin.stat:
