@@ -122,6 +122,14 @@
       check_mode: false
       when: not ansible_check_mode
 
+    - name: "{{ pr }}: drop an unmarked lumians-vision entry (Vibe can rewrite the file and lose the markers)"
+      ansible.builtin.script:
+        cmd: "{{ playbook_dir }}/scripts/drop_unmarked_vision.py {{ pr_home }}/.vibe-plum/config.toml"
+        executable: /usr/bin/python3
+      register: pr_dropvision
+      changed_when: "'changed' in pr_dropvision.stdout"
+      when: not ansible_check_mode
+
     - name: "{{ pr }}: the vision tool is an MCP server of Plum's Vibe"
       ansible.builtin.blockinfile:
         path: "{{ pr_home }}/.vibe-plum/config.toml"
