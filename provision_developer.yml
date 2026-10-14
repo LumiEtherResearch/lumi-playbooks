@@ -15,12 +15,19 @@
       ansible.builtin.set_fact:
         approved_vscode_commit: "{{ (pinned_raw.content | b64decode | from_yaml).approved_vscode_commit }}"
 
+    - name: Developer group for the Engineering Memory and Plan Registry writers
+      ansible.builtin.group:
+        name: lumi-dev
+        state: present
+
     - name: Create developer Linux accounts
       ansible.builtin.user:
         name: "{{ item.username }}"
         shell: /bin/bash
         create_home: true
         state: present
+        groups: lumi-dev
+        append: true
       loop: "{{ developers }}"
       loop_control:
         label: "{{ item.username }}"
