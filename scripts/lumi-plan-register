@@ -49,6 +49,8 @@ def main():
     for p in paths:
         if not PATH.match(p) or ".." in p.split("/"):
             die("bad path (relative paths only, no '..'): %s" % p)
+        if not p.strip("*/."):
+            die("scope too broad: %s (name a real folder or file)" % p)
     user = os.environ.get("SUDO_USER")
     if not user or user == "root":
         die("must be run through sudo by a developer")
