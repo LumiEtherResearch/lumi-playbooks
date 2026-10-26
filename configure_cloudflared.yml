@@ -1,0 +1,186 @@
+---
+# Cloudflare Tunnel client (cloudflared): package, tunnel config and systemd unit, as running on node-2.
+#
+# What it manages:
+#   - the cloudflared package, pinned to one release .deb (URL + sha256), not to Cloudflare's apt repo, which only
+#     keeps the latest version
+#   - /etc/cloudflared/config.yml (tunnel id, protocol and ingress rules; identifiers only, no secrets)
+#   - the cloudflared.service unit and its TimeoutStartSec override; the service is enabled and started
+#   - cloudflared-update.timer stays disabled (the unit also runs with --no-autoupdate)
+#
+# What it does NOT manage, on purpose (secrets, never in Git or in Ansible variables):
+#   - the tunnel credentials file  ~/.cloudflared/<tunnel-id>.json
+#   - the account certificate      ~/.cloudflared/cert.pem   (only needed to create or route tunnels, not to run one)
+# They must exist before this play enables the service. On a new server restore them from the encrypted secrets
+# backup (scripts/restore.sh apply <dir> secrets); the play stops with a message if the credentials file is missing.
+#
+# Idempotent. Checked on node-2 (live files are the source for every value below).
+# Bump the version: change cloudflared_version and cloudflared_deb_sha256 together (sha256sum of the release .deb).
+# Rollback: sudo apt-get install --allow-downgrades ./cloudflared_<old>.deb ; sudo systemctl restart cloudflared
+- name: Cloudflare Tunnel client
+  hosts: "{{ target | default('all') }}"
+  become: true
+  vars:
+    cloudflared_version: "2026.9.1"
+    cloudflared_deb_url: "https://github.com/cloudflare/cloudflared/releases/download/{{ cloudflared_version }}/cloudflared-linux-amd64.deb"
+    cloudflared_deb_sha256: "3be76adc4185d36a0bfb4c2dd8663292f0ed363797f2180333b513b43c81d419"
+    cloudflared_user: node-1
+    cloudflared_tunnel_id: "452db3bb-8341-4d1f-b890-69d282736bf9"
+    cloudflared_protocol: http2
+    cloudflared_ingress:
+      - { hostname: identity.caymas.in, service: "http://127.0.0.1:8082" }
+    cloudflared_start_timeout: 180
+    cloudflared_creds_dir: "/home/{{ cloudflared_user }}/.cloudflared"
+    # false only for tests without systemd
+    cloudflared_manage_services: true
+  tasks:
+    - name: Installed cloudflared version
+      ansible.builtin.command: dpkg-query -W -f='${Version}' cloudflared
+      register: cloudflared_installed
+      failed_when: false
+      changed_when: false
+      check_mode: false
+
+    - name: Download the pinned cloudflared release package
+      ansible.builtin.get_url:
+        url: "{{ cloudflared_deb_url }}"
+        dest: "/var/cache/cloudflared_{{ cloudflared_version }}_amd64.deb"
+        checksum: "sha256:{{ cloudflared_deb_sha256 }}"
+        owner: root
+        group: root
+        mode: "0644"
+      when: cloudflared_installed.stdout != cloudflared_version
+
+    - name: Install the pinned cloudflared package
+      ansible.builtin.apt:
+        deb: "/var/cache/cloudflared_{{ cloudflared_version }}_amd64.deb"
+        allow_downgrade: true
+      when: cloudflared_installed.stdout != cloudflared_version
+      notify: restart cloudflared
+
+    - name: Credentials directory (contents are restored from the secrets backup, never by this play)
+      ansible.builtin.file:
+        path: "{{ cloudflared_creds_dir }}"
+        state: directory
+        owner: "{{ cloudflared_user }}"
+        group: "{{ cloudflared_user }}"
+        mode: "0700"
+
+    - name: Tunnel credentials file
+      ansible.builtin.stat:
+        path: "{{ cloudflared_creds_dir }}/{{ cloudflared_tunnel_id }}.json"
+      register: cloudflared_creds
+
+    - name: The tunnel credentials file must exist
+      ansible.builtin.assert:
+        that: cloudflared_creds.stat.exists
+        fail_msg: >-
+          {{ cloudflared_creds_dir }}/{{ cloudflared_tunnel_id }}.json is missing. It is a secret and is not managed by
+          this play. Restore it from the encrypted secrets backup (scripts/restore.sh apply <dir> secrets) or create a
+          new tunnel with 'cloudflared tunnel login' and 'cloudflared tunnel create', then update cloudflared_tunnel_id
+          and the DNS routes.
+        success_msg: "credentials file present (contents not read)"
+
+    - name: Config directory
+      ansible.builtin.file:
+        path: /etc/cloudflared
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Tunnel config
+      ansible.builtin.copy:
+        dest: /etc/cloudflared/config.yml
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          tunnel: {{ cloudflared_tunnel_id }}
+          protocol: {{ cloudflared_protocol }}
+          credentials-file: {{ cloudflared_creds_dir }}/{{ cloudflared_tunnel_id }}.json
+
+          ingress:
+          {% for rule in cloudflared_ingress %}
+            - hostname: {{ rule.hostname }}
+              service: {{ rule.service }}
+          {% endfor %}
+            - service: http_status:404
+      notify: restart cloudflared
+
+    - name: systemd unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/cloudflared.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Cloudflare Tunnel client
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          TimeoutStartSec=15
+          Type=notify
+          ExecStart=/usr/bin/cloudflared --no-autoupdate --config /etc/cloudflared/config.yml tunnel run
+          Restart=on-failure
+          RestartSec=5s
+
+          [Install]
+          WantedBy=multi-user.target
+      register: cloudflared_unit
+      notify: restart cloudflared
+
+    - name: systemd drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/system/cloudflared.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: systemd drop-in (more time to start; the tunnel can take a while after boot)
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/cloudflared.service.d/override.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Service]
+          TimeoutStartSec={{ cloudflared_start_timeout }}
+      register: cloudflared_dropin
+      notify: restart cloudflared
+
+    - name: Reload systemd, enable and start cloudflared; keep the package's update timer off
+      when: cloudflared_manage_services | bool
+      block:
+        - name: daemon-reload
+          ansible.builtin.systemd:
+            daemon_reload: true
+          when: cloudflared_unit.changed or cloudflared_dropin.changed
+
+        - name: cloudflared enabled and running
+          ansible.builtin.systemd:
+            name: cloudflared
+            enabled: true
+            state: started
+
+        - name: cloudflared-update.timer disabled (the tunnel runs with --no-autoupdate and a pinned package)
+          ansible.builtin.systemd:
+            name: cloudflared-update.timer
+            enabled: false
+            state: stopped
+          failed_when: false
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: "cloudflared {{ cloudflared_version }} for tunnel {{ cloudflared_tunnel_id }}: ingress {{ cloudflared_ingress | map(attribute='hostname') | join(', ') }}"
+
+  handlers:
+    - name: restart cloudflared
+      ansible.builtin.systemd:
+        name: cloudflared
+        state: restarted
+        daemon_reload: true
+      when: cloudflared_manage_services | bool
