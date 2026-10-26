@@ -63,27 +63,27 @@ Repo state: PB, BOOT, ENG have 0 unpushed commits. PB has two untracked files (`
 
 | File | Content (summary) | IaC file | Kind |
 |---|---|---|---|
-| `/etc/sudoers.d/node-1` | node-1 full NOPASSWD | NOT IN IAC | config |
-| `/etc/sudoers.d/awx-automation` | awx-automation full NOPASSWD | `configure_sudoers.yml` (**untracked in PB**) | config |
+| `/etc/sudoers.d/node-1` | node-1 full NOPASSWD | PB `configure_sudoers.yml` | config |
+| `/etc/sudoers.d/awx-automation` | awx-automation full NOPASSWD (stale: the account does not exist) | none; `configure_sudoers.yml` removes it while the user is absent | config |
 | `/etc/sudoers.d/lumiether-memory` | `%lumi-dev` may run `lumi-memory-write` | PB `configure_engineering_memory.yml` | config |
 | `/etc/sudoers.d/lumiether-plans` | `%lumi-dev` may run `lumi-plan-register` | PB `configure_plan_registry.yml` | config |
 
-Note: the user `awx-automation` is referenced but not found in `/etc/passwd` uid range 1000–65000 output; the account and its SSH login path should be checked (AWX credential `node2_ssh` likely logs in as node-1) *(not verified)*.
+Note (verified 2026-10-26): there is no `awx-automation` user or group (`getent`), no login or sudo by that name in `auth.log` or `last`, the AWX credentials are `node-2-ssh` (username `node-1`), `lumi-playbooks-deploy-key`, Demo Credential (admin) and Galaxy, no AWX host, inventory or job template sets `ansible_user`/user variables, and no repo or OpenTofu file mentions the name. The sudoers file is dead config from 2026-09-24. Correction to the first version of this audit: `configure_sudoers.yml` only ever managed `node-1`.
 
 ## 4. systemd units, timers, cron
 
 | Unit | What | IaC file | Kind |
 |---|---|---|---|
-| `cloudflared.service` + `.d/override.conf` | Cloudflare Tunnel | NOT IN IAC (copy in `~/collect/unit-cloudflared.txt`, not in Git) | config |
-| `cloudflared-update.service/.timer` | Tunnel auto-update (package default) | NOT IN IAC | config |
-| `/etc/cloudflared/config.yml`, `~/.cloudflared/config.yml` | Tunnel ingress rules | NOT IN IAC (copy in `~/collect/cloudflared-config.txt`) | config |
-| `~/.cloudflared/cert.pem`, `~/.cloudflared/<tunnel-id>.json` | Tunnel account cert and credentials | NOT IN IAC | **secret** |
+| `cloudflared.service` + `.d/override.conf` | Cloudflare Tunnel | PB `configure_cloudflared.yml` | config |
+| `cloudflared-update.service/.timer` | Tunnel auto-update (package default; timer is disabled) | PB `configure_cloudflared.yml` (keeps it disabled) | config |
+| `/etc/cloudflared/config.yml` | Tunnel ingress rules | PB `configure_cloudflared.yml` (`~/.cloudflared/config.yml` is a second, unmanaged copy) | config |
+| `~/.cloudflared/cert.pem`, `~/.cloudflared/<tunnel-id>.json` | Tunnel account cert and credentials | NOT IN IAC by design; restored from the encrypted secrets backup, play fails clearly if missing | **secret** |
 | `spire-agent.service` + `.d/selfheal.conf` | SPIRE agent | PB `install_spire_agent.yml`, `configure_spire_agent.yml`, `docker/spire-agent/start-agent.sh` | config |
 | `spire-oidc.service` + `/usr/local/bin/oidc-discovery-provider` | SPIRE OIDC discovery for Mistral WIF | PB `configure_spire_agent.yml` | config |
 | `vibe-token.service` + `/usr/local/bin/vibe-token-refresh` | Refresh Mistral token from SPIRE | PB `configure_spire_agent.yml` | config |
-| `wif-adapter.service`, `wif-adapter-bridge.service` | Local Mistral WIF adapter (host and Docker bridge) | NOT IN IAC (source in `~/collect/wif_adapter.txt`, `unit-wif-adapter*.txt`, not in Git) | config |
-| `/etc/lumiether/adapter.env` | WIF adapter environment (adapter key) | NOT IN IAC | **secret** |
-| `/etc/lumiether/vibe-model.toml` | Vibe model selection | PB `docker/vibe-cbm/lumiether/gen-config.py`, `docker-compose.yml` (consumers); file placement not verified | config |
+| `wif-adapter.service`, `wif-adapter-bridge.service` | Local Mistral WIF adapter (host and Docker bridge) | PB `configure_wif_adapter.yml` (source and pinned requirements in `files/wif-adapter/`) | config |
+| `/etc/lumiether/adapter.env` | WIF adapter environment (adapter key) | PB `configure_wif_adapter.yml`, create-only (fails clearly if missing and no key supplied); value never in Git | **secret** |
+| `/etc/lumiether/vibe-model.toml` | Vibe model selection | PB `configure_wif_adapter.yml` (placement); consumers `docker/vibe-cbm/lumiether/gen-config.py`, `docker-compose.yml` | config |
 | `lumiether-expose-repos.service/.timer` | Exposes repos read-only to plum | PB `configure_plum_readonly.yml`, `docker/vibe-cbm/lumiether/chat/lumiether-expose-repos.sh` | config |
 | `k3s.service`, `k3s.service.env` | Kubernetes | BOOT `main.tf` | config |
 | user crontab / `/etc/cron.d` | None custom (only anacron, e2scrub) | n/a | n/a |
@@ -148,7 +148,7 @@ Workspaces under `/srv/lumiether/workspaces/*` contain application Dockerfiles a
 | AWX postgres PVC (local-path) | AWX DB: job history, credentials (encrypted) | Not backed up | **data/secret** |
 | AWX admin secret | Admin password | BOOT `main.tf` (generated at apply time) | secret |
 | AWX objects: org lookup, inventory `lumi_infra`, host `node2`, project `lumi_playbooks`, credentials `node2_ssh` and `lumi_playbooks_deploy_key`, 9 job templates | AWX configuration | BOOT `awx-config/main.tf` | config |
-| AWX templates exist for 9 of 19 playbooks: `docker_status`, `install_spire_agent`, `install_vibe`, `plum_isolation` (check/apply), `lumiether_vibe` (check/apply), `pin_vscode_version`, `provision_developer` | | BOOT `awx-config/main.tf` | config |
+| AWX has 9 job templates covering 7 of the 18 playbooks: `docker_status`, `install_spire_agent`, `install_vibe`, `plum_isolation` (check/apply), `lumiether_vibe` (check/apply), `pin_vscode_version`, `provision_developer` | | BOOT `awx-config/main.tf` | config |
 | No AWX template for: `configure_engineering_foundation`, `configure_engineering_memory`, `configure_plan_registry`, `configure_workspace_map`, `configure_plum_readonly`, `configure_spire_agent`, `install_flutter`, `install_android_sdk`, `install_codebasemem`, `configure_sudoers`, `configure_vibe_auth` | These run by hand or never in AWX | NOT IN IAC | config |
 | `~/infra-bootstrap/awx-config/.envrc-awx` | AWX API login for OpenTofu | NOT IN IAC (file mode 600, correctly untracked) | secret |
 | Portainer admin and API token, `.envrc-portainer` | Portainer API login for OpenTofu | NOT IN IAC | secret |
@@ -205,11 +205,11 @@ Each gap is a thing a one-command rebuild cannot recreate.
 
 ## C. Services running with no IaC definition
 
-14. **cloudflared** service, override, update timer, and config (copies in untracked `~/collect/`).
-15. **wif-adapter** and **wif-adapter-bridge** units and the adapter program (`wif_adapter.py` source only in untracked `~/collect/`).
+14. **cloudflared** service, override, update timer, and config: now `configure_cloudflared.yml` (gap 3, branch `gap3-collect-playbooks`; AWX templates still to be added).
+15. **wif-adapter** and **wif-adapter-bridge** units, the adapter program and its Python environment: now `configure_wif_adapter.yml` plus `files/wif-adapter/` (gap 3; AWX templates still to be added). The old `~/collect` files were redacted copies and one of them (`start-agent.txt`) contains a SPIRE join token; they are not the source of truth and are not tracked.
 16. **openvpn.service** enabled with no known config *(not verified)*.
-17. **`awx-automation` sudoers** is defined in the untracked `configure_sudoers.yml`; `node-1` sudoers and the node-1 and `ahpd-spike-user` accounts have no definition.
-18. **11 of 19 playbooks have no AWX job template**, including every `configure_engineering_*`, `configure_plan_registry`, `configure_workspace_map`, `configure_plum_readonly`, `configure_spire_agent`, `install_flutter`, `install_android_sdk`, `install_codebasemem`. A rebuild via AWX would skip them.
+17. **`node-1` sudoers** is now `configure_sudoers.yml` (gap 3), which also removes the stale `awx-automation` file while that user does not exist (see the note in section 3). The node-1 and `ahpd-spike-user` accounts still have no definition.
+18. **11 of 18 playbooks have no AWX job template**, including every `configure_engineering_*`, `configure_plan_registry`, `configure_workspace_map`, `configure_plum_readonly`, `configure_spire_agent`, `install_flutter`, `install_android_sdk`, `install_codebasemem`. A rebuild via AWX would skip them.
 19. `/usr/local/bin/vibe-acp-bridge` install step is not confirmed in a playbook; repo copy and installed copy should be diffed.
 
 ## D. Ordering and bootstrap problems for the "one command" goal
