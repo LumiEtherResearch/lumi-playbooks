@@ -2,7 +2,8 @@
 # Encrypted backup of node-2 state: a data archive and a secrets archive, each with its own passphrase.
 #
 # Usage: scripts/backup.sh [--check]
-#   --check  preflight only: verify tools, containers, volumes and paths, print the plan, change nothing.
+#   --check     preflight only: verify tools, containers, volumes and paths, print the plan, change nothing.
+#   --test-awx  run only the AWX dump step (dump, copy out, checksum, validate), keep nothing.
 #
 # Output (BACKUP_DIR, default /var/backups/lumi):
 #   lumi-data-<UTC>.tar.zst.gpg     OpenTofu state, DB dumps, Docker volumes, /srv/plum*
@@ -42,7 +43,8 @@ MODE=run
 case "${1:-}" in
   "") ;;
   --check) MODE=check ;;
-  *) die "usage: $0 [--check]" ;;
+  --test-awx) MODE=test-awx ;;
+  *) die "usage: $0 [--check | --test-awx]" ;;
 esac
 
 ask_pass() { # ask_pass VAR LABEL  (prompt twice, store in VAR)
@@ -81,7 +83,7 @@ preflight() {
   for v in "${HOT_VOLUMES[@]}" "${STOP_VOLUMES[@]#*:}"; do
     docker volume inspect "$v" >/dev/null 2>&1 || die "volume $v not found"
   done
-  sudo k3s kubectl -n "$AWX_NS" get pod "$AWX_POD" >/dev/null 2>&1 || die "AWX pod $AWX_POD not found"
+  sudo timeout 30 k3s kubectl -n "$AWX_NS" get pod "$AWX_POD" >/dev/null 2>&1 || die "AWX pod $AWX_POD not found"
   for f in "${STATE_FILES[@]}"; do [[ -f $BOOT/$f ]] || die "missing state file $BOOT/$f"; done
   for p in "${SECRET_PATHS[@]}"; do sudo test -e "/$p" || die "missing /$p"; done
   [[ -n $(sudo find /srv -maxdepth 1 -type d -name 'plum*' -print -quit) ]] || die "no /srv/plum* directories"
@@ -107,17 +109,32 @@ Plan ($TS), output in $OUT:
 EOF
 }
 
-preflight
-print_plan
-if [[ $MODE == check ]]; then say "preflight OK; nothing changed"; exit 0; fi
-
-ask_pass DATA_PW data
-ask_pass SEC_PW secrets
-[[ $DATA_PW != "$SEC_PW" ]] || die "the two passphrases must differ"
-
-sudo install -d -m 700 -o "$(id -u)" -g "$(id -g)" "$OUT"
-STAGE=$(mktemp -d "$OUT/.stage-$TS.XXXXXX")
+STAGE=
 STOPPED=()
+AWX_REMOTE=
+
+# Every kubectl exec runs under timeout and never reads the terminal: `kubectl exec -i` can wait
+# forever on stdin when the remote command stops reading it (e.g. pg_restore -l).
+# KC_TIMEOUT (seconds) can be overridden per call.
+kc() { sudo timeout "${KC_TIMEOUT:-120}" k3s kubectl -n "$AWX_NS" exec "$AWX_POD" -c postgres -- "$@" </dev/null; }
+
+dump_awx() { # dump_awx DEST  (the awx database only, custom format; user and db name come from the pod's own env)
+  local dest=$1 want got toc
+  AWX_REMOTE=/tmp/awx-backup-$TS.dump
+  KC_TIMEOUT=330 kc sh -c 'umask 077; timeout 300 pg_dump -w -Fc -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f "$1"' _ "$AWX_REMOTE" \
+    || die "pg_dump in the AWX pod failed or timed out"
+  want=$(kc sha256sum "$AWX_REMOTE") || die "could not checksum the dump in the pod"
+  want=${want%% *}
+  kc cat "$AWX_REMOTE" > "$dest" || die "could not copy the AWX dump out of the pod"
+  got=$(sha256sum < "$dest"); got=${got%% *}
+  [[ -n $want && $got == "$want" ]] || die "AWX dump checksum differs between pod and host"
+  kc rm -f "$AWX_REMOTE" && AWX_REMOTE=
+  # Validate on the host side in a scratch container (pg_restore reads the whole archive TOC).
+  toc=$(timeout 60 docker run --rm -i --pull never --network none "$IMG" pg_restore -l < "$dest") \
+    || die "AWX dump failed pg_restore -l"
+  [[ $toc == *"TABLE DATA"* ]] || die "AWX dump has no table data"
+  say "AWX dump OK: $(stat -c %s "$dest") bytes, sha256 ${got:0:12}, $(grep -c 'TABLE DATA' <<<"$toc") tables"
+}
 
 cleanup() {
   local rc=$? c
@@ -125,12 +142,34 @@ cleanup() {
     if docker start "$c" >/dev/null 2>&1; then echo "restarted $c" >&2
     else echo "WARNING: could not restart $c; run: docker start $c" >&2; fi
   done
-  sudo rm -rf "$STAGE"
+  if [[ -n $AWX_REMOTE ]]; then kc rm -f "$AWX_REMOTE" >/dev/null 2>&1 || echo "WARNING: remove $AWX_REMOTE in pod $AWX_POD by hand" >&2; fi
+  if [[ -n $STAGE ]]; then sudo rm -rf "$STAGE"; fi
   find "$OUT" -maxdepth 1 -name '*.partial' -delete
   exit "$rc"
 }
-trap cleanup EXIT
-trap 'exit 130' INT TERM
+
+setup_stage() {
+  sudo install -d -m 700 -o "$(id -u)" -g "$(id -g)" "$OUT"
+  STAGE=$(mktemp -d "$OUT/.stage-$TS.XXXXXX")
+  trap cleanup EXIT
+  trap 'exit 130' INT TERM
+}
+
+preflight
+if [[ $MODE == test-awx ]]; then
+  setup_stage
+  mkdir "$STAGE/pg"
+  dump_awx "$STAGE/pg/awx.dump"
+  say "AWX step passed; test only, nothing kept"
+  exit 0
+fi
+print_plan
+if [[ $MODE == check ]]; then say "preflight OK; nothing changed"; exit 0; fi
+
+ask_pass DATA_PW data
+ask_pass SEC_PW secrets
+[[ $DATA_PW != "$SEC_PW" ]] || die "the two passphrases must differ"
+setup_stage
 
 verify_archive() { # verify_archive PASSVAR FILE  (decrypt and read the whole archive)
   say "verifying $(basename "$2")"
@@ -158,13 +197,9 @@ for c in "${PLUM_PG[@]}"; do
   say "pg_dumpall $c"
   dump_pg "$c" docker exec "$c" sh -c 'pg_dumpall -U "$POSTGRES_USER"'
 done
-# The AWX db user is not a superuser, so pg_dumpall (roles) is not possible: dump the awx database
-# only, custom format. User and database name are read inside the pod from its own env.
+# The AWX db user is not a superuser, so pg_dumpall (roles) is not possible: dump the awx database only.
 say "pg_dump AWX database"
-AWX_EXEC=(sudo k3s kubectl -n "$AWX_NS" exec -i "$AWX_POD" -c postgres --)
-"${AWX_EXEC[@]}" sh -c 'pg_dump -Fc -U "$POSTGRES_USER" -d "$POSTGRES_DB"' > "$STAGE/pg/awx.dump"
-# Validate by having pg_restore read the table of contents inside the pod.
-"${AWX_EXEC[@]}" pg_restore -l < "$STAGE/pg/awx.dump" >/dev/null || die "AWX dump failed validation"
+dump_awx "$STAGE/pg/awx.dump"
 
 vol_tar() { # vol_tar VOLUME  (read-only mount, tar written to the staging dir)
   docker run --rm --pull never --network none -v "$1":/v:ro -v "$STAGE/volumes":/out \

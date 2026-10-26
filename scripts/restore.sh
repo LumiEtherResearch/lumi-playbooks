@@ -124,9 +124,14 @@ apply_plum_pg() {
 apply_awx_pg() {
   [[ -f $DIR/pg/awx.dump ]] || die "missing $DIR/pg/awx.dump"
   confirm awx-pg "Replace the contents of the AWX database in $AWX_NS/$AWX_POD with the backup (pg_restore --clean, one transaction). Scale AWX web/task to 0 first (sudo k3s kubectl -n $AWX_NS scale deploy awx-demo-web awx-demo-task --replicas=0) and back to 1 afterwards."
-  sudo k3s kubectl -n "$AWX_NS" exec -i "$AWX_POD" -c postgres -- sh -c \
-    'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists --no-owner --no-privileges --single-transaction --exit-on-error' \
-    < "$DIR/pg/awx.dump"
+  # Copy the dump into the pod and restore from the file: streaming it through `kubectl exec -i` into
+  # pg_restore can hang when the remote command stops reading stdin. Every call is under timeout.
+  local remote=/tmp/awx-restore-$TS.dump
+  local kx=(sudo timeout 300 k3s kubectl -n "$AWX_NS" exec "$AWX_POD" -c postgres --)
+  sudo timeout 300 k3s kubectl -n "$AWX_NS" exec -i "$AWX_POD" -c postgres -- sh -c 'umask 077; cat > "$1"' _ "$remote" < "$DIR/pg/awx.dump" || die "could not copy the dump into the pod"
+  "${kx[@]}" sh -c 'pg_restore -w -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists --no-owner --no-privileges --single-transaction --exit-on-error "$1"' _ "$remote" </dev/null \
+    || { "${kx[@]}" rm -f "$remote" </dev/null || true; die "pg_restore failed; the AWX database is unchanged (single transaction)"; }
+  "${kx[@]}" rm -f "$remote" </dev/null
 }
 
 restore_volume() { # restore_volume VOLUME CONTAINER...  (containers using it; stopped during the restore)
