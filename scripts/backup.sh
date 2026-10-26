@@ -95,7 +95,8 @@ print_plan() {
 Plan ($TS), output in $OUT:
   data archive    lumi-data-$TS.tar.zst.gpg
     - OpenTofu state: ${#STATE_FILES[@]} files under $BOOT
-    - pg_dumpall: ${PLUM_PG[*]} + AWX postgres ($AWX_NS/$AWX_POD)
+    - pg_dumpall: ${PLUM_PG[*]}
+    - pg_dump -Fc of the AWX database ($AWX_NS/$AWX_POD; the db user is not a superuser)
     - volumes, hot copy (containers keep running): ${HOT_VOLUMES[*]}
     - volumes, container stopped briefly (asks for Enter first): ${STOP_VOLUMES[*]}
     - /srv/plum* directories (hot copy)
@@ -157,8 +158,13 @@ for c in "${PLUM_PG[@]}"; do
   say "pg_dumpall $c"
   dump_pg "$c" docker exec "$c" sh -c 'pg_dumpall -U "$POSTGRES_USER"'
 done
-say "pg_dumpall AWX"
-dump_pg awx-postgres sudo k3s kubectl -n "$AWX_NS" exec "$AWX_POD" -c postgres -- sh -c 'pg_dumpall -U "$POSTGRES_USER"'
+# The AWX db user is not a superuser, so pg_dumpall (roles) is not possible: dump the awx database
+# only, custom format. User and database name are read inside the pod from its own env.
+say "pg_dump AWX database"
+AWX_EXEC=(sudo k3s kubectl -n "$AWX_NS" exec -i "$AWX_POD" -c postgres --)
+"${AWX_EXEC[@]}" sh -c 'pg_dump -Fc -U "$POSTGRES_USER" -d "$POSTGRES_DB"' > "$STAGE/pg/awx.dump"
+# Validate by having pg_restore read the table of contents inside the pod.
+"${AWX_EXEC[@]}" pg_restore -l < "$STAGE/pg/awx.dump" >/dev/null || die "AWX dump failed validation"
 
 vol_tar() { # vol_tar VOLUME  (read-only mount, tar written to the staging dir)
   docker run --rm --pull never --network none -v "$1":/v:ro -v "$STAGE/volumes":/out \
@@ -199,7 +205,7 @@ created_utc=$TS
 host=$(hostname)
 script_commit=$(git -C "$(dirname "$0")" rev-parse --short HEAD 2>/dev/null || echo unknown)
 tofu_state_root=$BOOT
-pg_dumps=${PLUM_PG[*]} awx-postgres
+pg_dumps=${PLUM_PG[*]} awx(pg_dump -Fc)
 volumes_hot=${HOT_VOLUMES[*]}
 volumes_stopped=${STOP_VOLUMES[*]#*:}
 srv_dirs=${PLUM_DIRS[*]}
