@@ -2,6 +2,12 @@ version: "3.8"
 
 services:
   vibe-cbm:
+    # Private image in GHCR, published by scripts/publish-images.sh. `build:` stays so the same
+    # Dockerfile can rebuild it (`docker compose build`).
+    # Pinned by digest (printed by `publish-images.sh vibe`); update it after each republish.
+    # Pulling needs a registry login on the host/Portainer (read:packages) that is not set up yet:
+    # do not deploy this file to the Portainer stack before that.
+    image: ghcr.io/lumiether-research/vibe-cbm:vibe2.25.8-cbm0.11.0@sha256:53d43e9b7cd2d786ae63d7a3b5e33ce88ee9096e19222ca19d9b3bbdea39ee7e
     build:
       context: .
       dockerfile: Dockerfile
