@@ -1,0 +1,247 @@
+---
+# Local Mistral WIF adapter used by Vibe: the small web service, its Python environment and both systemd units.
+#
+#   wif-adapter.service         127.0.0.1:8090   Vibe on the host (no key)
+#   wif-adapter-bridge.service  172.19.0.1:8091  the vibe-cbm container, over the Docker bridge (bearer key required)
+#
+# What it manages:
+#   - the adapter source (files/wif-adapter/wif_adapter.py) and a Python venv built from the pinned
+#     files/wif-adapter/requirements.txt (the exact versions running on node-2)
+#   - the two units, and /etc/lumiether/vibe-model.toml (provider fragment for the container; names only, no key)
+#   - /etc/lumiether/adapter.env, CREATE-ONLY: if the file exists it is never read, changed or replaced. If it is
+#     missing the play creates it only when lumi_adapter_key is supplied (e.g. from an AWX credential); otherwise it
+#     stops with a message. It never generates a key: the same value must be set as LUMI_ADAPTER_KEY in the vibe-cbm
+#     Portainer stack environment, and a new random key here would silently break the container.
+#
+# Needs the Mistral token file written by vibe-token.service (configure_spire_agent.yml): run that play first.
+# The bridge address 172.19.0.1 is the gateway of the vibe-cbm compose network (subnet pinned in its compose file);
+# if that network does not exist yet the bridge unit keeps retrying (Restart=always) until it does.
+#
+# Expected differences when first checked against node-2 (tightening only): /home/node-1/wif-test 775 -> 755 and
+# wif_adapter.py 664 -> 644, plus requirements.txt being added. Everything else matches the live files.
+# Rollback: restore the old modes by hand; the units and sources are unchanged in content.
+- name: Mistral WIF adapter
+  hosts: "{{ target | default('all') }}"
+  become: true
+  vars:
+    wif_user: node-1
+    wif_dir: /home/node-1/wif-test
+    wif_python: /usr/bin/python3.14
+    wif_src: "{{ playbook_dir }}/files/wif-adapter"
+    wif_sa_token_path: /home/node-1/.config/vibe/sa-token
+    wif_mistral_url: https://api.mistral.ai
+    wif_host_bind: 127.0.0.1
+    wif_host_port: 8090
+    wif_bridge_bind: 172.19.0.1
+    wif_bridge_port: 8091
+    wif_env_file: /etc/lumiether/adapter.env
+    # Supply only when /etc/lumiether/adapter.env does not exist yet. Never put a real value in a repo file.
+    lumi_adapter_key: ""
+    # false only for tests without systemd
+    wif_manage_services: true
+  tasks:
+    - name: Python and venv support
+      ansible.builtin.apt:
+        name: [python3, python3-venv]
+        state: present
+
+    - name: The Python interpreter for the venv exists
+      ansible.builtin.stat:
+        path: "{{ wif_python }}"
+      register: wif_python_stat
+      failed_when: not wif_python_stat.stat.exists
+
+    - name: Adapter directory
+      ansible.builtin.file:
+        path: "{{ wif_dir }}"
+        state: directory
+        owner: "{{ wif_user }}"
+        group: "{{ wif_user }}"
+        mode: "0755"
+
+    - name: Adapter source
+      ansible.builtin.copy:
+        src: "{{ wif_src }}/wif_adapter.py"
+        dest: "{{ wif_dir }}/wif_adapter.py"
+        owner: "{{ wif_user }}"
+        group: "{{ wif_user }}"
+        mode: "0644"
+      notify: [restart wif-adapter, restart wif-adapter-bridge]
+
+    - name: Pinned requirements (also a record of what is installed)
+      ansible.builtin.copy:
+        src: "{{ wif_src }}/requirements.txt"
+        dest: "{{ wif_dir }}/requirements.txt"
+        owner: "{{ wif_user }}"
+        group: "{{ wif_user }}"
+        mode: "0644"
+      register: wif_requirements
+
+    - name: Python venv
+      ansible.builtin.command: "{{ wif_python }} -m venv {{ wif_dir }}"
+      args:
+        creates: "{{ wif_dir }}/bin/python"
+      become_user: "{{ wif_user }}"
+      register: wif_venv
+
+    - name: Install the pinned packages into the venv
+      ansible.builtin.pip:
+        requirements: "{{ wif_dir }}/requirements.txt"
+        virtualenv: "{{ wif_dir }}"
+      become_user: "{{ wif_user }}"
+      when: wif_requirements.changed or wif_venv.changed
+      notify: [restart wif-adapter, restart wif-adapter-bridge]
+
+    - name: Lumiether config directory
+      ansible.builtin.file:
+        path: /etc/lumiether
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Vibe provider fragment for the container (no secrets; the key is read from LUMI_ADAPTER_KEY at run time)
+      ansible.builtin.copy:
+        dest: /etc/lumiether/vibe-model.toml
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          active_model = "mistral-small-4"
+
+          [[providers]]
+          name = "wif-local"
+          api_base = "http://{{ wif_bridge_bind }}:{{ wif_bridge_port }}/v1"
+          api_key_env_var = "LUMI_ADAPTER_KEY"
+          backend = "generic"
+
+          [[models]]
+          name = "mistral-small-2603"
+          provider = "wif-local"
+          alias = "mistral-small-4"
+
+    - name: Does the adapter key file exist? (only its presence is checked, never its contents)
+      ansible.builtin.stat:
+        path: "{{ wif_env_file }}"
+      register: wif_env_stat
+
+    - name: The adapter key file must exist, or lumi_adapter_key must be supplied
+      ansible.builtin.assert:
+        that: wif_env_stat.stat.exists or (lumi_adapter_key | length > 0)
+        fail_msg: >-
+          {{ wif_env_file }} is missing and lumi_adapter_key was not supplied. It holds the bearer key the vibe-cbm
+          container sends to the adapter and must equal LUMI_ADAPTER_KEY in the vibe-cbm Portainer stack environment.
+          Restore the file from the encrypted secrets backup (scripts/restore.sh apply <dir> secrets), or generate a
+          key yourself (openssl rand -hex 32), set it in the stack, and pass it to this play as lumi_adapter_key.
+        success_msg: "adapter key file present or supplied (contents not read)"
+
+    - name: Create the adapter key file (only when it is missing; an existing file is never touched)
+      ansible.builtin.copy:
+        dest: "{{ wif_env_file }}"
+        content: "LUMI_ADAPTER_KEY={{ lumi_adapter_key }}\n"
+        owner: root
+        group: root
+        mode: "0600"
+        force: false
+      no_log: true
+      when: not wif_env_stat.stat.exists
+      notify: restart wif-adapter-bridge
+
+    - name: Is the Mistral token present? (written by vibe-token.service)
+      ansible.builtin.stat:
+        path: "{{ wif_sa_token_path }}"
+      register: wif_token_stat
+
+    - name: Warn if the token is missing (run configure_spire_agent.yml first; the adapter answers 5xx until it exists)
+      ansible.builtin.debug:
+        msg: "{{ wif_sa_token_path }} does not exist yet; the adapter cannot reach Mistral until vibe-token.service has written it."
+      when: not wif_token_stat.stat.exists
+
+    - name: Host adapter unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/wif-adapter.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Local Mistral WIF adapter for Vibe
+          After=network-online.target vibe-token.service
+          Wants=vibe-token.service
+
+          [Service]
+          User={{ wif_user }}
+          WorkingDirectory={{ wif_dir }}
+          Environment=MISTRAL_SA_TOKEN_PATH={{ wif_sa_token_path }}
+          Environment=MISTRAL_CLIENT_SERVER_URL={{ wif_mistral_url }}
+          ExecStart={{ wif_dir }}/bin/uvicorn wif_adapter:app --host {{ wif_host_bind }} --port {{ wif_host_port }}
+          Restart=on-failure
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+      register: wif_unit_host
+      notify: restart wif-adapter
+
+    - name: Container bridge adapter unit (key required)
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/wif-adapter-bridge.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Mistral WIF adapter for the vibe-cbm container (Docker bridge only, key required)
+          After=network-online.target vibe-token.service docker.service
+          Wants=vibe-token.service
+
+          [Service]
+          User={{ wif_user }}
+          WorkingDirectory={{ wif_dir }}
+          Environment=MISTRAL_SA_TOKEN_PATH={{ wif_sa_token_path }}
+          Environment=MISTRAL_CLIENT_SERVER_URL={{ wif_mistral_url }}
+          Environment=OTEL_SDK_DISABLED=true
+          Environment=OTEL_ENABLED=false
+          EnvironmentFile={{ wif_env_file }}
+          ExecStart={{ wif_dir }}/bin/uvicorn wif_adapter:app --host {{ wif_bridge_bind }} --port {{ wif_bridge_port }}
+          Restart=always
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+      register: wif_unit_bridge
+      notify: restart wif-adapter-bridge
+
+    - name: Reload systemd, enable and start both adapters
+      when: wif_manage_services | bool
+      block:
+        - name: daemon-reload
+          ansible.builtin.systemd:
+            daemon_reload: true
+          when: wif_unit_host.changed or wif_unit_bridge.changed
+
+        - name: Adapters enabled and running
+          ansible.builtin.systemd:
+            name: "{{ item }}"
+            enabled: true
+            state: started
+          loop: [wif-adapter, wif-adapter-bridge]
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: "WIF adapter: host {{ wif_host_bind }}:{{ wif_host_port }}, bridge {{ wif_bridge_bind }}:{{ wif_bridge_port }} (adapter.env present: {{ wif_env_stat.stat.exists }})"
+
+  handlers:
+    - name: restart wif-adapter
+      ansible.builtin.systemd:
+        name: wif-adapter
+        state: restarted
+        daemon_reload: true
+      when: wif_manage_services | bool
+
+    - name: restart wif-adapter-bridge
+      ansible.builtin.systemd:
+        name: wif-adapter-bridge
+        state: restarted
+        daemon_reload: true
+      when: wif_manage_services | bool

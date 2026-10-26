@@ -1,0 +1,55 @@
+---
+# Passwordless sudo for the automation/admin account, as running on node-2.
+#
+# For every name in nopasswd_users it writes /etc/sudoers.d/<name> with "<name> ALL=(ALL) NOPASSWD:ALL" (mode 0440,
+# checked with visudo before it is installed, so a typo cannot lock sudo out). Names in sudoers_absent have their
+# file removed, but only while no such user exists: a sudoers file for a missing account grants root to whoever
+# creates that account later.
+#
+# Keep both lists in this file. Do NOT turn on "prompt on launch" for variables in the AWX templates: anyone who can
+# launch the job could then add users with passwordless root.
+#
+# node-2 today: node-1 (this file's default) and a stale awx-automation entry. AWX logs in as node-1 (credential
+# node-2-ssh), there is no awx-automation account, and nothing in the repos, AWX or the SSH logs uses it.
+- name: Configure passwordless sudo for automation/dev users
+  hosts: "{{ target | default('all') }}"
+  become: true
+  vars:
+    nopasswd_users:
+      - node-1
+    sudoers_absent:
+      - awx-automation
+
+  tasks:
+    - name: Ensure NOPASSWD sudoers entry exists per user
+      ansible.builtin.copy:
+        dest: "/etc/sudoers.d/{{ item }}"
+        content: "{{ item }} ALL=(ALL) NOPASSWD:ALL\n"
+        owner: root
+        group: root
+        mode: "0440"
+        validate: "visudo -cf %s"
+      loop: "{{ nopasswd_users }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Existing accounts
+      ansible.builtin.getent:
+        database: passwd
+
+    - name: Remove sudoers files of accounts that do not exist
+      ansible.builtin.file:
+        path: "/etc/sudoers.d/{{ item }}"
+        state: absent
+      loop: "{{ sudoers_absent }}"
+      loop_control:
+        label: "{{ item }}"
+      when: item not in getent_passwd and item not in nopasswd_users
+
+    - name: Refuse to touch the file of an account that exists
+      ansible.builtin.debug:
+        msg: "{{ item }} exists as a user, so /etc/sudoers.d/{{ item }} was left alone"
+      loop: "{{ sudoers_absent }}"
+      loop_control:
+        label: "{{ item }}"
+      when: item in getent_passwd
