@@ -6,7 +6,7 @@ services:
     # Dockerfile can rebuild it (`docker compose build`).
     # TODO: append @sha256:<digest> (printed by `publish-images.sh vibe`) after the first push, and
     # do not deploy this file to the Portainer stack before that: the host has no registry login yet.
-    image: ghcr.io/lumietherresearch/vibe-cbm:vibe2.25.8-cbm0.11.0
+    image: ghcr.io/lumiether-research/vibe-cbm:vibe2.25.8-cbm0.11.0
     build:
       context: .
       dockerfile: Dockerfile

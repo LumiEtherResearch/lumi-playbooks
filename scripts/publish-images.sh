@@ -12,7 +12,7 @@
 # and `docker logout ghcr.io` afterwards. Each push prints the digest to pin in compose or OpenTofu.
 set -euo pipefail
 
-ORG=ghcr.io/lumietherresearch
+ORG=ghcr.io/lumiether-research
 PLUM_LOCAL=${PLUM_LOCAL:-valentin2177/plum-code-webui@sha256:2918a8161065f1034d3233ca739c97453ae251343fe217b40ec61b8b8cdda2fd}
 REPO_ROOT=$(git rev-parse --show-toplevel)
 DOCKERFILE=$REPO_ROOT/docker/vibe-cbm/Dockerfile
