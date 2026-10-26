@@ -157,12 +157,14 @@ apply_srv_plum() {
 apply_secrets() {
   local p
   sudo test -f "$DIR/SECRETS.sha256" || die "$DIR is not an extracted secrets archive"
-  confirm secrets "Restore ~/.ssh, ~/.cloudflared and /etc/lumiether from the backup. Existing ones are renamed *.pre-restore-$TS."
+  confirm secrets "Restore ~/.ssh, ~/.cloudflared, /etc/lumiether and the OpenTofu .envrc-* files from the backup. Existing ones are renamed *.pre-restore-$TS."
   while IFS= read -r p; do
     if sudo test -e "/${p#"$DIR"/}"; then sudo mv "/${p#"$DIR"/}" "/${p#"$DIR"/}.pre-restore-$TS"; fi
+    sudo mkdir -p "$(dirname "/${p#"$DIR"/}")"
     sudo cp -a "$p" "/${p#"$DIR"/}"
   done < <(sudo find "$DIR/home" -mindepth 2 -maxdepth 2 \( -name .ssh -o -name .cloudflared \) -print; \
-           sudo find "$DIR/etc" -mindepth 1 -maxdepth 1 -name lumiether -print)
+           sudo find "$DIR/etc" -mindepth 1 -maxdepth 1 -name lumiether -print; \
+           sudo find "$DIR/home" -type f -name '.envrc-*' -print)
 }
 
 cmd_apply() {

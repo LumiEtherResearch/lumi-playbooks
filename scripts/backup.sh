@@ -32,7 +32,8 @@ STATE_FILES=(terraform.tfstate terraform.tfstate.backup
   awx-config/terraform.tfstate awx-config/terraform.tfstate.backup
   portainer-config/terraform.tfstate portainer-config/terraform.tfstate.backup)
 # Paths for the secrets archive, relative to /.
-SECRET_PATHS=("${HOME#/}/.ssh" "${HOME#/}/.cloudflared" etc/lumiether)
+SECRET_PATHS=("${HOME#/}/.ssh" "${HOME#/}/.cloudflared" etc/lumiether
+  "${BOOT#/}/awx-config/.envrc-awx" "${BOOT#/}/portainer-config/.envrc-portainer")
 
 die() { echo "backup.sh: $*" >&2; exit 1; }
 say() { echo "== $*" >&2; }
@@ -100,7 +101,8 @@ Plan ($TS), output in $OUT:
     - /srv/plum* directories (hot copy)
   secrets archive lumi-secrets-$TS.tar.zst.gpg
     - /${SECRET_PATHS[0]}  /${SECRET_PATHS[1]}  /${SECRET_PATHS[2]}
-  Not included: .envrc-awx, .envrc-portainer, ~/lumians, the plum/postgres raw volumes (dumps are used instead).
+    - /${SECRET_PATHS[3]}  /${SECRET_PATHS[4]}
+  Not included: ~/lumians, the plum postgres raw volumes (dumps are used instead).
 EOF
 }
 
