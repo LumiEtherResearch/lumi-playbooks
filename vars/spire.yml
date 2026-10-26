@@ -1,0 +1,14 @@
+---
+# SPIRE values shared by configure_spire_agent.yml and configure_spire_oidc.yml (one place, so they cannot drift apart).
+spire_trust_domain_uri: spiffe://lumietherresearch.com
+spire_agent_dir: /opt/spire-agent
+spire_agent_socket: /run/spire/agent-sockets/api.sock
+# Where vibe-token.service writes the Mistral JWT-SVID (read by the WIF adapter, configure_wif_adapter.yml).
+spire_token_file: /home/node-1/.config/vibe/sa-token
+spire_server_container: spire-server
+
+# Workload registration entries. The ids are fixed on purpose: configure_spire_agent.yml re-parents these exact ids to the
+# live agent after every start, and configure_spire_oidc.yml creates them with the same ids on a server that has none.
+spire_workload_entries:
+  - { id: 7ad6d15f-b358-4b33-9168-dc3606e29c91, spiffe: oidc-discovery-provider, selector: "unix:user:spire-oidc" }
+  - { id: 9d12fa2d-90a6-44f9-86db-20e7bfae719b, spiffe: vibe, selector: "unix:user:node-1" }

@@ -79,8 +79,9 @@ Note (verified 2026-10-26): there is no `awx-automation` user or group (`getent`
 | `/etc/cloudflared/config.yml` | Tunnel ingress rules | PB `configure_cloudflared.yml` (`~/.cloudflared/config.yml` is a second, unmanaged copy) | config |
 | `~/.cloudflared/cert.pem`, `~/.cloudflared/<tunnel-id>.json` | Tunnel account cert and credentials | NOT IN IAC by design; restored from the encrypted secrets backup, play fails clearly if missing | **secret** |
 | `spire-agent.service` + `.d/selfheal.conf` | SPIRE agent | PB `install_spire_agent.yml`, `configure_spire_agent.yml`, `docker/spire-agent/start-agent.sh` | config |
-| `spire-oidc.service` + `/usr/local/bin/oidc-discovery-provider` | SPIRE OIDC discovery for Mistral WIF | PB `configure_spire_agent.yml` | config |
-| `vibe-token.service` + `/usr/local/bin/vibe-token-refresh` | Refresh Mistral token from SPIRE | PB `configure_spire_agent.yml` | config |
+| `spire-oidc.service` + `/usr/local/bin/oidc-discovery-provider` | SPIRE OIDC discovery for Mistral WIF | PB `configure_spire_oidc.yml` (correction: `configure_spire_agent.yml` only restarts it; before gap 4 no playbook created it) | config |
+| `vibe-token.service` + `/usr/local/bin/vibe-token-refresh` | Refresh Mistral token from SPIRE | PB `configure_spire_oidc.yml` (same correction) | config |
+| SPIRE workload entries `oidc-discovery-provider` and `vibe` | Registration entries the two services above use | PB `configure_spire_oidc.yml` creates them with the fixed ids from `vars/spire.yml` if missing; `configure_spire_agent.yml` re-parents them | data |
 | `wif-adapter.service`, `wif-adapter-bridge.service` | Local Mistral WIF adapter (host and Docker bridge) | PB `configure_wif_adapter.yml` (source and pinned requirements in `files/wif-adapter/`) | config |
 | `/etc/lumiether/adapter.env` | WIF adapter environment (adapter key) | PB `configure_wif_adapter.yml`, create-only (fails clearly if missing and no key supplied); value never in Git | **secret** |
 | `/etc/lumiether/vibe-model.toml` | Vibe model selection | PB `configure_wif_adapter.yml` (placement); consumers `docker/vibe-cbm/lumiether/gen-config.py`, `docker-compose.yml` | config |

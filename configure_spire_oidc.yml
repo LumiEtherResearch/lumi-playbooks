@@ -1,0 +1,289 @@
+---
+# SPIRE OIDC discovery provider and the Mistral token refresher, as running on node-2.
+#
+#   spire-oidc.service   serves the OIDC discovery document and keys of the SPIRE trust domain on 127.0.0.1:8082;
+#                        cloudflared publishes it as https://<domain> (configure_cloudflared.yml) and Mistral verifies the
+#                        tokens against it
+#   vibe-token.service   every 2 minutes fetches a JWT-SVID (audience api-gateway) from the SPIRE agent and writes it to
+#                        the token file that the WIF adapter reads (configure_wif_adapter.yml)
+#
+# What it manages
+#   - the spire-oidc system user and the oidc-discovery-provider binary (SPIRE 1.9.6 "extras" release, pinned by sha256)
+#   - /opt/spire-oidc/conf/oidc.conf, both units and /usr/local/bin/vibe-token-refresh
+#   - the two SPIRE workload registration entries the services depend on, created ONLY if missing and with the fixed ids
+#     from vars/spire.yml. configure_spire_agent.yml re-parents exactly those ids to the live agent after every start
+#     ("entry update"), which fails when they do not exist. On node-2 (and after a restore of the SPIRE data volume)
+#     they exist and nothing is created.
+# What it does not manage: the SPIRE server (Portainer stack in infra-bootstrap/portainer-config), the agent
+# (install_spire_agent.yml, configure_spire_agent.yml) and the tunnel (configure_cloudflared.yml). No secrets are written
+# by this play: the token file is created at run time by vibe-token.service.
+#
+# Order on a new server: SPIRE server up -> install_spire_agent.yml -> THIS play -> configure_spire_agent.yml.
+# Idempotent. Values come from the live files on node-2 (checked identical when this play was written).
+# Bump the version: change spire_version, spire_extras_sha256 and spire_oidc_binary_sha256 together.
+# Rollback: sudo systemctl disable --now spire-oidc vibe-token (the files are left in place).
+- name: SPIRE OIDC discovery provider and Mistral token refresher
+  hosts: "{{ target | default('all') }}"
+  become: true
+  vars_files:
+    - vars/spire.yml
+  vars:
+    spire_version: "1.9.6"
+    spire_extras_url: "https://github.com/spiffe/spire/releases/download/v{{ spire_version }}/spire-extras-{{ spire_version }}-linux-amd64-musl.tar.gz"
+    # sha256 of the release tarball, and of oidc-discovery-provider inside it
+    spire_extras_sha256: "9989ce85d5846ec4455fc645f1d80b2862e4972023b59be3f4a2f1c93217c117"
+    spire_oidc_binary_sha256: "4eeee2aac7d1d58b5f2ae0b47320afa180ce0218deb102a373cf7cc90fe81c24"
+    spire_oidc_bin: /usr/local/bin/oidc-discovery-provider
+    spire_oidc_user: spire-oidc
+    spire_oidc_conf_dir: /opt/spire-oidc/conf
+    spire_oidc_domains: ["identity.caymas.in"]   # must match the cloudflared ingress hostname
+    spire_oidc_listen: "127.0.0.1:8082"          # must match the cloudflared ingress service
+    vibe_token_user: node-1
+    vibe_token_audience: api-gateway
+    vibe_token_interval: 120
+    # false only for tests without systemd/docker
+    spire_oidc_manage_services: true
+  tasks:
+    - name: The SPIRE agent is installed (install_spire_agent.yml)
+      ansible.builtin.stat:
+        path: "{{ spire_agent_dir }}/bin/spire-agent"
+      register: spire_agent_bin
+      failed_when: not spire_agent_bin.stat.exists
+
+    - name: Group for the OIDC provider
+      ansible.builtin.group:
+        name: "{{ spire_oidc_user }}"
+        system: true
+
+    - name: User for the OIDC provider (the registration entry selects it by name)
+      ansible.builtin.user:
+        name: "{{ spire_oidc_user }}"
+        group: "{{ spire_oidc_user }}"
+        system: true
+        shell: /usr/sbin/nologin
+        create_home: false
+
+    - name: Installed oidc-discovery-provider
+      ansible.builtin.stat:
+        path: "{{ spire_oidc_bin }}"
+        checksum_algorithm: sha256
+      register: spire_oidc_stat
+
+    - name: Install the pinned oidc-discovery-provider
+      when: not spire_oidc_stat.stat.exists or spire_oidc_stat.stat.checksum != spire_oidc_binary_sha256
+      block:
+        - name: Download the SPIRE extras release
+          ansible.builtin.get_url:
+            url: "{{ spire_extras_url }}"
+            dest: "/var/cache/spire-extras-{{ spire_version }}.tar.gz"
+            checksum: "sha256:{{ spire_extras_sha256 }}"
+            owner: root
+            group: root
+            mode: "0644"
+
+        - name: Scratch directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: spire-extras-
+          register: spire_extras_tmp
+
+        - name: Unpack only the provider binary
+          ansible.builtin.unarchive:
+            src: "/var/cache/spire-extras-{{ spire_version }}.tar.gz"
+            dest: "{{ spire_extras_tmp.path }}"
+            remote_src: true
+            include:
+              - "spire-extras-{{ spire_version }}/bin/oidc-discovery-provider"
+
+        - name: Install the binary
+          ansible.builtin.copy:
+            src: "{{ spire_extras_tmp.path }}/spire-extras-{{ spire_version }}/bin/oidc-discovery-provider"
+            dest: "{{ spire_oidc_bin }}"
+            remote_src: true
+            owner: root
+            group: root
+            mode: "0755"
+          notify: restart spire-oidc
+
+        - name: Installed binary is the pinned one
+          ansible.builtin.stat:
+            path: "{{ spire_oidc_bin }}"
+            checksum_algorithm: sha256
+          register: spire_oidc_after
+          failed_when: not ansible_check_mode and spire_oidc_after.stat.checksum != spire_oidc_binary_sha256
+
+      always:
+        - name: Remove the scratch directory
+          ansible.builtin.file:
+            path: "{{ spire_extras_tmp.path }}"
+            state: absent
+          when: spire_extras_tmp.path is defined
+
+    - name: OIDC provider config directory
+      ansible.builtin.file:
+        path: "{{ spire_oidc_conf_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: OIDC provider config
+      ansible.builtin.copy:
+        dest: "{{ spire_oidc_conf_dir }}/oidc.conf"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          log_level = "INFO"
+          domains = {{ spire_oidc_domains | to_json }}
+          insecure_addr = "{{ spire_oidc_listen }}"
+
+          workload_api {
+            socket_path = "{{ spire_agent_socket }}"
+            trust_domain = "{{ spire_trust_domain_uri | regex_replace('^spiffe://', '') }}"
+          }
+      notify: restart spire-oidc
+
+    - name: spire-oidc unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/spire-oidc.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=SPIRE OIDC Discovery Provider
+          After=network-online.target
+
+          [Service]
+          User={{ spire_oidc_user }}
+          ExecStart={{ spire_oidc_bin }} -config {{ spire_oidc_conf_dir }}/oidc.conf
+          Restart=on-failure
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+      register: spire_oidc_unit
+      notify: restart spire-oidc
+
+    - name: Token refresh script
+      ansible.builtin.copy:
+        dest: /usr/local/bin/vibe-token-refresh
+        owner: root
+        group: root
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          OUT={{ spire_token_file }}
+          mkdir -p "$(dirname "$OUT")"
+          umask 077
+          while true; do
+            TOK=$({{ spire_agent_dir }}/bin/spire-agent api fetch jwt \
+              -audience {{ vibe_token_audience }} \
+              -socketPath {{ spire_agent_socket }} | awk 'NR==2{print $1}')
+            if [ -n "$TOK" ]; then
+              printf '%s' "$TOK" > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
+            fi
+            sleep {{ vibe_token_interval }}
+          done
+      notify: restart vibe-token
+
+    - name: vibe-token unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/vibe-token.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Refresh Mistral SA token from SPIRE for Vibe
+          After=network-online.target
+
+          [Service]
+          User={{ vibe_token_user }}
+          ExecStart=/usr/local/bin/vibe-token-refresh
+          Restart=always
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+      register: vibe_token_unit
+      notify: restart vibe-token
+
+    - name: SPIRE server container is running (the registration entries live there)
+      ansible.builtin.command: docker inspect -f '{% raw %}{{.State.Running}}{% endraw %}' {{ spire_server_container }}
+      register: spire_server_running
+      changed_when: false
+      check_mode: false
+      failed_when: spire_server_running.stdout | default('') != 'true'
+      when: spire_oidc_manage_services | bool
+
+    - name: Registration entries the services depend on
+      ansible.builtin.command: >-
+        docker exec {{ spire_server_container }} /opt/spire/bin/spire-server entry show -entryID {{ item.id }}
+      loop: "{{ spire_workload_entries }}"
+      loop_control:
+        label: "{{ item.spiffe }}"
+      register: spire_entry_check
+      changed_when: false
+      check_mode: false
+      failed_when: false   # a missing entry is expected here; the next task rejects any other error
+      when: spire_oidc_manage_services | bool
+
+    - name: A failed lookup must be "not found", not some other error
+      ansible.builtin.assert:
+        that: item.rc == 0 or 'NotFound' in item.stderr
+        fail_msg: "could not look up the SPIRE entry for {{ item.item.spiffe }}: {{ item.stderr }}"
+        quiet: true
+      loop: "{{ spire_entry_check.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.spiffe }}"
+      when: spire_oidc_manage_services | bool and item.rc is defined
+
+    - name: Create the missing entries with their fixed ids (configure_spire_agent.yml re-parents them to the live agent)
+      ansible.builtin.command: >-
+        docker exec {{ spire_server_container }} /opt/spire/bin/spire-server entry create
+        -entryID {{ item.item.id }}
+        -parentID {{ spire_trust_domain_uri }}/spire/agent/join_token/pending
+        -spiffeID {{ spire_trust_domain_uri }}/{{ item.item.spiffe }}
+        -selector {{ item.item.selector }}
+      loop: "{{ spire_entry_check.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.spiffe }}"
+      when: spire_oidc_manage_services | bool and item.rc is defined and item.rc != 0
+
+    - name: Reload systemd, enable and start both services
+      when: spire_oidc_manage_services | bool
+      block:
+        - name: daemon-reload
+          ansible.builtin.systemd:
+            daemon_reload: true
+          when: spire_oidc_unit.changed or vibe_token_unit.changed
+
+        - name: Services enabled and running
+          ansible.builtin.systemd:
+            name: "{{ item }}"
+            enabled: true
+            state: started
+          loop: [spire-oidc, vibe-token]
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: >-
+          SPIRE OIDC provider for {{ spire_oidc_domains | join(', ') }} on {{ spire_oidc_listen }}; token file
+          {{ spire_token_file }} refreshed every {{ vibe_token_interval }}s; entries checked: {{ spire_workload_entries | map(attribute='spiffe') | join(', ') }}
+
+  handlers:
+    - name: restart spire-oidc
+      ansible.builtin.systemd:
+        name: spire-oidc
+        state: restarted
+        daemon_reload: true
+      when: spire_oidc_manage_services | bool
+
+    - name: restart vibe-token
+      ansible.builtin.systemd:
+        name: vibe-token
+        state: restarted
+        daemon_reload: true
+      when: spire_oidc_manage_services | bool
