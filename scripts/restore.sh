@@ -6,7 +6,9 @@
 #   restore.sh extract ARCHIVE.gpg NEWDIR          decrypt into a new directory and check its checksums
 #   restore.sh apply   DIR COMPONENT...            put extracted content back on this host
 #
-# Components for a data archive:  tofu-state plum-pg awx-pg portainer spire cbm srv-plum
+# Components for a data archive:  tofu-state plum-pg awx-pg portainer spire cbm srv-plum lumiether-data workspace-wip
+#   lumiether-data  Engineering Memory and Plan Registry (/srv/lumiether)
+#   workspace-wip   uncommitted work saved from the developer workspaces: applied onto checkouts that are already cloned
 # Component for a secrets archive: secrets
 #
 # Nothing is overwritten without typing the component name. Existing files are renamed
@@ -23,7 +25,10 @@ AWX_POD=awx-demo-postgres-15-0
 
 die() { echo "restore.sh: $*" >&2; exit 1; }
 say() { echo "== $*" >&2; }
-usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+# shellcheck source=lib/workspace-wip.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/workspace-wip.sh"
 
 [[ $EUID -ne 0 ]] || die "run as the normal user (uses sudo where needed), not root"
 sudo -n true 2>/dev/null || die "need passwordless sudo"
@@ -162,6 +167,25 @@ apply_srv_plum() {
   sudo tar --numeric-owner -C /srv -xpf "$t"
 }
 
+apply_lumiether_data() {
+  local t=$DIR/srv/lumiether-data.tar d
+  [[ -f $t ]] || die "missing $t"
+  confirm lumiether-data "Restore /srv/lumiether/engineering-memory and /srv/lumiether/plan-registry from the backup. Existing directories are renamed *.pre-restore-$TS. Run the memory and plan-registry playbooks first so the writers and their sudo rules exist."
+  while IFS= read -r d; do
+    if sudo test -e "/srv/lumiether/$d"; then sudo mv "/srv/lumiether/$d" "/srv/lumiether/$d.pre-restore-$TS"; fi
+  done < <(tar -tf "$t" | cut -d/ -f1 | sort -u)
+  sudo tar --numeric-owner -C /srv/lumiether -xpf "$t"
+}
+
+apply_workspace_wip() {
+  [[ -f $DIR/workspaces/INDEX.tsv ]] || die "missing $DIR/workspaces/INDEX.tsv"
+  confirm workspace-wip "Apply the saved uncommitted workspace changes onto the checkouts under /srv/lumiether/workspaces (they must already be cloned: configure_workspace_clone.yml). Checkouts that already have local changes are skipped, existing files are never overwritten, nothing is committed. Ignored files and git stashes were never saved."
+  wip_restore "$DIR/workspaces" /srv/lumiether/workspaces
+  if [[ -s $DIR/workspaces/SKIPPED.txt ]]; then
+    echo "NOT in the backup (reported when it was made):" >&2; sed 's/^/  /' "$DIR/workspaces/SKIPPED.txt" >&2
+  fi
+}
+
 apply_secrets() {
   local p
   sudo test -f "$DIR/SECRETS.sha256" || die "$DIR is not an extracted secrets archive"
@@ -189,6 +213,8 @@ cmd_apply() {
       spire)      restore_volume spire-server_spire_server_data spire-server ;;
       cbm)        for v in vibe-cbm_cbm-data vibe-cbm_vibe-config vibe-cbm_workspaces; do restore_volume "$v" vibe-cbm; done ;;
       srv-plum)   apply_srv_plum ;;
+      lumiether-data) apply_lumiether_data ;;
+      workspace-wip)  apply_workspace_wip ;;
       secrets)    apply_secrets ;;
       *) die "unknown component: $c" ;;
     esac

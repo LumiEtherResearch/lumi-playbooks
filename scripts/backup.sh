@@ -6,7 +6,9 @@
 #   --test-awx  run only the AWX dump step (dump, copy out, checksum, validate), keep nothing.
 #
 # Output (BACKUP_DIR, default /var/backups/lumi):
-#   lumi-data-<UTC>.tar.zst.gpg     OpenTofu state, DB dumps, Docker volumes, /srv/plum*
+#   lumi-data-<UTC>.tar.zst.gpg     OpenTofu state, DB dumps, Docker volumes, /srv/plum*, the Engineering Memory and Plan
+#                                   Registry (/srv/lumiether), and the uncommitted work in the developer workspaces
+#                                   (patches, untracked files, unpushed commits; see scripts/lib/workspace-wip.sh)
 #   lumi-secrets-<UTC>.tar.zst.gpg  ~/.ssh, ~/.cloudflared, /etc/lumiether (incl. deploy keys)
 #   <archive>.sha256                checksum to verify the copy after scp
 #
@@ -32,12 +34,19 @@ STOP_VOLUMES=(portainer:portainer_data spire-server:spire-server_spire_server_da
 STATE_FILES=(terraform.tfstate terraform.tfstate.backup
   awx-config/terraform.tfstate awx-config/terraform.tfstate.backup
   portainer-config/terraform.tfstate portainer-config/terraform.tfstate.backup)
+# Engineering Memory and Plan Registry (small, root-owned, written only by the trusted writers) and the workspaces.
+LUMI_ROOT=/srv/lumiether
+LUMI_DATA_DIRS=(engineering-memory plan-registry)
+WORKSPACES=$LUMI_ROOT/workspaces
 # Paths for the secrets archive, relative to /.
 SECRET_PATHS=("${HOME#/}/.ssh" "${HOME#/}/.cloudflared" etc/lumiether
   "${BOOT#/}/awx-config/.envrc-awx" "${BOOT#/}/portainer-config/.envrc-portainer")
 
 die() { echo "backup.sh: $*" >&2; exit 1; }
 say() { echo "== $*" >&2; }
+
+# shellcheck source=lib/workspace-wip.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/workspace-wip.sh"
 
 MODE=run
 case "${1:-}" in
@@ -87,6 +96,8 @@ preflight() {
   for f in "${STATE_FILES[@]}"; do [[ -f $BOOT/$f ]] || die "missing state file $BOOT/$f"; done
   for p in "${SECRET_PATHS[@]}"; do sudo test -e "/$p" || die "missing /$p"; done
   [[ -n $(sudo find /srv -maxdepth 1 -type d -name 'plum*' -print -quit) ]] || die "no /srv/plum* directories"
+  for f in "${LUMI_DATA_DIRS[@]}"; do sudo test -d "$LUMI_ROOT/$f" || die "missing $LUMI_ROOT/$f"; done
+  sudo test -d "$WORKSPACES" || die "missing $WORKSPACES"
   local avail
   avail=$(df --output=avail -B1 "$(dirname "$OUT")" | tail -n 1)
   (( avail > 2 * 1024 ** 3 )) || die "less than 2 GiB free under $(dirname "$OUT")"
@@ -102,6 +113,9 @@ Plan ($TS), output in $OUT:
     - volumes, hot copy (containers keep running): ${HOT_VOLUMES[*]}
     - volumes, container stopped briefly (asks for Enter first): ${STOP_VOLUMES[*]}
     - /srv/plum* directories (hot copy)
+    - ${LUMI_ROOT}/{${LUMI_DATA_DIRS[*]// /,}}: Engineering Memory and Plan Registry
+    - uncommitted work in $WORKSPACES: patch of tracked changes, untracked files that are not git-ignored (capped per
+      repository), commits that are on no remote. NOT saved: ignored files (such as .env), git stashes (listed if any).
   secrets archive lumi-secrets-$TS.tar.zst.gpg
     - /${SECRET_PATHS[0]}  /${SECRET_PATHS[1]}  /${SECRET_PATHS[2]}
     - /${SECRET_PATHS[3]}  /${SECRET_PATHS[4]}
@@ -164,6 +178,8 @@ if [[ $MODE == test-awx ]]; then
   exit 0
 fi
 print_plan
+say "uncommitted work in the workspaces right now (read-only look; nothing is written)"
+wip_summary "$WORKSPACES"
 if [[ $MODE == check ]]; then say "preflight OK; nothing changed"; exit 0; fi
 
 ask_pass DATA_PW data
@@ -182,7 +198,7 @@ finish_archive() { # finish_archive FILE  (rename .partial, write checksum)
 }
 
 # ---------- data archive ----------
-mkdir "$STAGE"/{tofu,pg,volumes,srv}
+mkdir "$STAGE"/{tofu,pg,volumes,srv,workspaces}
 
 say "OpenTofu state"
 tar -C "$BOOT" -cf "$STAGE/tofu/tofu-state.tar" "${STATE_FILES[@]}"
@@ -234,6 +250,13 @@ say "/srv/plum*"
 mapfile -d '' -t PLUM_DIRS < <(sudo find /srv -maxdepth 1 -type d -name 'plum*' -printf '%f\0' | sort -z)
 sudo tar --numeric-owner -C /srv -cf "$STAGE/srv/srv-plum.tar" "${PLUM_DIRS[@]}"
 
+say "Engineering Memory and Plan Registry"
+sudo tar --numeric-owner -C "$LUMI_ROOT" -cf "$STAGE/srv/lumiether-data.tar" "${LUMI_DATA_DIRS[@]}"
+
+# Uncommitted work in the workspaces: patches, untracked files, unpushed commits. Read-only on the repositories.
+say "uncommitted workspace changes"
+wip_capture "$WORKSPACES" "$STAGE/workspaces"
+
 sudo chown -R "$(id -u):$(id -g)" "$STAGE"
 cat > "$STAGE/META.txt" <<EOF
 created_utc=$TS
@@ -244,6 +267,9 @@ pg_dumps=${PLUM_PG[*]} awx(pg_dump -Fc)
 volumes_hot=${HOT_VOLUMES[*]}
 volumes_stopped=${STOP_VOLUMES[*]#*:}
 srv_dirs=${PLUM_DIRS[*]}
+lumiether_data=${LUMI_DATA_DIRS[*]}
+workspace_wip_repositories=$(grep -c . "$STAGE/workspaces/INDEX.tsv" || true)
+workspace_wip_not_saved=$(grep -c . "$STAGE/workspaces/SKIPPED.txt" || true)
 EOF
 (cd "$STAGE" && find . -type f ! -name MANIFEST.sha256 -print0 | sort -z | xargs -0 sha256sum > MANIFEST.sha256)
 
