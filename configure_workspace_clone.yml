@@ -1,0 +1,116 @@
+---
+# Clone the application repositories into the developer workspaces on a NEW server.
+#
+# Input: workspace_repos, a list of { developer, path, repo }. It is deliberately not in this (public) repository: the list
+# lives in the private infra-bootstrap repository (bootstrap/workspaces.yml) and is passed in as extra variables by the
+# rebuild script, so nothing here names a private repository.
+#
+# Safe on a server that already has the checkouts: a directory that already exists is never touched (update: false), so
+# this play only fills in what is missing. It does not restore uncommitted changes and does not create the
+# <developer>_main branches (configure_workspace_map.yml does that afterwards).
+#
+# Private GitHub repositories are cloned over SSH with a read-only key in /etc/lumiether/deploy-keys/workspaces. That key
+# is a secret: it is not in Git and not created here. It is restored from the encrypted secrets backup, or created by a
+# human (a read-only machine user or deploy keys with access to the repositories). The play stops with a clear message if
+# a repository needs it and it is missing. Repositories cloned over https (public ones) need no key.
+#
+# Order on a new server: provision_developer.yml (accounts) -> configure_plum_isolation.yml (workspace directories and
+# ACLs) -> THIS play -> configure_workspace_map.yml (branches).
+# Idempotent. Rollback: delete the checkout you do not want; nothing else is changed.
+- name: Clone developer workspace repositories
+  hosts: "{{ target | default('all') }}"
+  become: true
+  vars:
+    workspace_repos: []
+    workspaces_key: /etc/lumiether/deploy-keys/workspaces
+    workspaces_root: /srv/lumiether/workspaces
+  tasks:
+    - name: Nothing to do without a repository list
+      ansible.builtin.debug:
+        msg: "workspace_repos is empty: pass it as extra variables (infra-bootstrap/bootstrap/workspaces.yml)"
+      when: workspace_repos | length == 0
+
+    - name: Every path is inside the workspace root
+      ansible.builtin.assert:
+        that:
+          - item.path.startswith(workspaces_root ~ '/')
+          - "'..' not in item.path"
+          - item.developer is defined
+          - item.repo is defined
+        fail_msg: "bad workspace entry: {{ item }}"
+        quiet: true
+      loop: "{{ workspace_repos }}"
+      loop_control:
+        label: "{{ item.path | default('?') }}"
+
+    - name: Repositories that need the SSH key
+      ansible.builtin.set_fact:
+        workspaces_need_key: "{{ workspace_repos | selectattr('repo', 'match', '^(git@|ssh://)') | list | length > 0 }}"
+
+    - name: The read-only SSH key (only its presence is checked, never its contents)
+      ansible.builtin.stat:
+        path: "{{ workspaces_key }}"
+      register: workspaces_key_stat
+      when: workspaces_need_key | bool
+
+    - name: The key must exist when a repository needs it
+      ansible.builtin.assert:
+        that: workspaces_key_stat.stat.exists
+        fail_msg: >-
+          {{ workspaces_key }} is missing. It is a read-only key with access to the application repositories and is not
+          managed by this play. Restore it from the encrypted secrets backup (scripts/restore.sh apply <dir> secrets) or
+          create one and place it there (owner root, mode 0600).
+        success_msg: "key present (contents not read)"
+      when: workspaces_need_key | bool
+
+    # Normally created by configure_plum_isolation.yml (which also sets the ACLs); a missing one is created with the same owner and mode.
+    - name: The developer's workspace directory exists
+      ansible.builtin.file:
+        path: "{{ workspaces_root }}/{{ item.developer }}"
+        state: directory
+        owner: "{{ item.developer }}"
+        group: "{{ item.developer }}"
+        mode: "0770"
+      loop: "{{ workspace_repos }}"
+      loop_control:
+        label: "{{ item.developer }}"
+
+    - name: Clone what is missing (existing checkouts are left exactly as they are)
+      ansible.builtin.git:
+        repo: "{{ item.repo }}"
+        dest: "{{ item.path }}"
+        key_file: "{{ workspaces_key if workspaces_need_key | bool else omit }}"
+        accept_hostkey: true
+        update: false
+      register: workspace_clone
+      loop: "{{ workspace_repos }}"
+      loop_control:
+        label: "{{ item.path | basename }} ({{ item.developer }})"
+
+    - name: Freshly cloned checkouts belong to the developer
+      ansible.builtin.file:
+        path: "{{ item.item.path }}"
+        state: directory
+        recurse: true
+        owner: "{{ item.item.developer }}"
+        group: "{{ item.item.developer }}"
+      loop: "{{ workspace_clone.results }}"
+      loop_control:
+        label: "{{ item.item.path | basename }}"
+      when: item is changed and not ansible_check_mode
+
+    - name: Freshly cloned top directories are group-writable like the existing ones (775)
+      ansible.builtin.file:
+        path: "{{ item.item.path }}"
+        state: directory
+        mode: "0775"
+      loop: "{{ workspace_clone.results }}"
+      loop_control:
+        label: "{{ item.item.path | basename }}"
+      when: item is changed and not ansible_check_mode
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: >-
+          cloned {{ workspace_clone.results | selectattr('changed') | list | length }} of
+          {{ workspace_repos | length }} repositories; the rest already existed
