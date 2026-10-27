@@ -7,7 +7,7 @@
 #
 # Output (BACKUP_DIR, default /var/backups/lumi):
 #   lumi-data-<UTC>.tar.zst.gpg     OpenTofu state, DB dumps, Docker volumes, /srv/plum*, the Engineering Memory and Plan
-#                                   Registry (/srv/lumiether), and the uncommitted work in the developer workspaces
+#                                   Registry (/srv/lumiether), and the uncommitted work in the developers' home checkouts
 #                                   (patches, untracked files, unpushed commits; see scripts/lib/workspace-wip.sh)
 #   lumi-secrets-<UTC>.tar.zst.gpg  ~/.ssh, ~/.cloudflared, /etc/lumiether (incl. deploy keys)
 #   <archive>.sha256                checksum to verify the copy after scp
@@ -38,6 +38,14 @@ STATE_FILES=(terraform.tfstate terraform.tfstate.backup
 LUMI_ROOT=/srv/lumiether
 LUMI_DATA_DIRS=(engineering-memory plan-registry)
 WORKSPACES=$LUMI_ROOT/workspaces
+# Uncommitted work is captured where the checkouts really live: the top-level git repos of each developer's HOME, plus the
+# shared checkouts directly under the workspaces root. NOT through /srv/lumiether/workspaces/<dev>/ (read-only bind mounts of
+# those same repos, and one fstab mount shows a different directory than the developer's own). node-1's repos are the IaC
+# repositories, whose commits are pushed, so they are not included. Override with WIP_USERS="abhi anish arun".
+read -r -a WIP_USER_LIST <<<"${WIP_USERS:-abhi anish arun}"
+WIP_SOURCES=()
+for _u in "${WIP_USER_LIST[@]}"; do WIP_SOURCES+=("/home/$_u:2"); done
+WIP_SOURCES+=("$WORKSPACES:2")
 # Paths for the secrets archive, relative to /.
 SECRET_PATHS=("${HOME#/}/.ssh" "${HOME#/}/.cloudflared" etc/lumiether
   "${BOOT#/}/awx-config/.envrc-awx" "${BOOT#/}/portainer-config/.envrc-portainer")
@@ -98,6 +106,7 @@ preflight() {
   [[ -n $(sudo find /srv -maxdepth 1 -type d -name 'plum*' -print -quit) ]] || die "no /srv/plum* directories"
   for f in "${LUMI_DATA_DIRS[@]}"; do sudo test -d "$LUMI_ROOT/$f" || die "missing $LUMI_ROOT/$f"; done
   sudo test -d "$WORKSPACES" || die "missing $WORKSPACES"
+  for f in "${WIP_USER_LIST[@]}"; do sudo test -d "/home/$f" || die "missing /home/$f (WIP_USERS)"; done
   local avail
   avail=$(df --output=avail -B1 "$(dirname "$OUT")" | tail -n 1)
   (( avail > 2 * 1024 ** 3 )) || die "less than 2 GiB free under $(dirname "$OUT")"
@@ -114,8 +123,9 @@ Plan ($TS), output in $OUT:
     - volumes, container stopped briefly (asks for Enter first): ${STOP_VOLUMES[*]}
     - /srv/plum* directories (hot copy)
     - ${LUMI_ROOT}/{${LUMI_DATA_DIRS[*]// /,}}: Engineering Memory and Plan Registry
-    - uncommitted work in $WORKSPACES: patch of tracked changes, untracked files that are not git-ignored (capped per
-      repository), commits that are on no remote. NOT saved: ignored files (such as .env), git stashes (listed if any).
+    - uncommitted work of ${WIP_USER_LIST[*]} (their top-level git repos in /home) and of the shared checkouts in
+      $WORKSPACES: patch of tracked changes, untracked files that are not git-ignored (capped per repository), commits that
+      are on no remote. NOT saved: ignored files (such as .env), git stashes (listed if any).
   secrets archive lumi-secrets-$TS.tar.zst.gpg
     - /${SECRET_PATHS[0]}  /${SECRET_PATHS[1]}  /${SECRET_PATHS[2]}
     - /${SECRET_PATHS[3]}  /${SECRET_PATHS[4]}
@@ -178,8 +188,8 @@ if [[ $MODE == test-awx ]]; then
   exit 0
 fi
 print_plan
-say "uncommitted work in the workspaces right now (read-only look; nothing is written)"
-wip_summary "$WORKSPACES"
+say "uncommitted work in the developers' checkouts right now (read-only look; nothing is written)"
+wip_summary "${WIP_SOURCES[@]}"
 if [[ $MODE == check ]]; then say "preflight OK; nothing changed"; exit 0; fi
 
 ask_pass DATA_PW data
@@ -255,7 +265,7 @@ sudo tar --numeric-owner -C "$LUMI_ROOT" -cf "$STAGE/srv/lumiether-data.tar" "${
 
 # Uncommitted work in the workspaces: patches, untracked files, unpushed commits. Read-only on the repositories.
 say "uncommitted workspace changes"
-wip_capture "$WORKSPACES" "$STAGE/workspaces"
+wip_capture "$STAGE/workspaces" "${WIP_SOURCES[@]}"
 
 sudo chown -R "$(id -u):$(id -g)" "$STAGE"
 cat > "$STAGE/META.txt" <<EOF

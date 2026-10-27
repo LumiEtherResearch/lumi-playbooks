@@ -8,7 +8,7 @@
 #
 # Components for a data archive:  tofu-state plum-pg awx-pg portainer spire cbm srv-plum lumiether-data workspace-wip
 #   lumiether-data  Engineering Memory and Plan Registry (/srv/lumiether)
-#   workspace-wip   uncommitted work saved from the developer workspaces: applied onto checkouts that are already cloned
+#   workspace-wip   uncommitted work saved from the developers' home checkouts and the shared ones: applied onto checkouts that are already cloned
 # Component for a secrets archive: secrets
 #
 # Nothing is overwritten without typing the component name. Existing files are renamed
@@ -179,8 +179,8 @@ apply_lumiether_data() {
 
 apply_workspace_wip() {
   [[ -f $DIR/workspaces/INDEX.tsv ]] || die "missing $DIR/workspaces/INDEX.tsv"
-  confirm workspace-wip "Apply the saved uncommitted workspace changes onto the checkouts under /srv/lumiether/workspaces (they must already be cloned: configure_workspace_clone.yml). Checkouts that already have local changes are skipped, existing files are never overwritten, nothing is committed. Ignored files and git stashes were never saved."
-  wip_restore "$DIR/workspaces" /srv/lumiether/workspaces
+  confirm workspace-wip "Apply the saved uncommitted changes onto the checkouts they came from (the developers' /home/<dev>/<repo> and the shared checkouts in /srv/lumiether/workspaces; they must already be cloned: configure_workspace_clone.yml). Checkouts that already have local changes are skipped, existing files are never overwritten, nothing is committed. Ignored files and git stashes were never saved."
+  wip_restore "$DIR/workspaces" /
   if [[ -s $DIR/workspaces/SKIPPED.txt ]]; then
     echo "NOT in the backup (reported when it was made):" >&2; sed 's/^/  /' "$DIR/workspaces/SKIPPED.txt" >&2
   fi
