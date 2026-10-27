@@ -1,0 +1,64 @@
+---
+# QEMU/KVM for the throw-away test VM that rehearses a rebuild of node-2 (infra-bootstrap/testvm/).
+#
+# What it does: installs qemu-system-x86, qemu-utils and cloud-image-utils (cloud-localds), puts the VM-running user in the
+# "kvm" group (that group is the only thing that grants access to /dev/kvm) and creates the folder for VM disks.
+#
+# What it does NOT do, on purpose:
+#   - it starts nothing: no VM, no service, no libvirt
+#   - it configures no bridge, no tap device and no shared folder. The test VM uses QEMU's user-mode networking only (outbound
+#     NAT, one port forwarded on 127.0.0.1) and never touches node-2's network. Ubuntu's qemu packages ship a bridge helper;
+#     without a rule in /etc/qemu/bridge.conf (this play writes none) it cannot be used, and the test scripts never ask for it.
+# Run the -check template first (AWX template lumiether-qemu-check): it only lists what would change.
+#
+# The kvm group change reaches already-open sessions only after a new login (or use `sg kvm -c ...`).
+# Idempotent. Rollback: apt-get remove qemu-system-x86 qemu-utils cloud-image-utils; gpasswd -d node-1 kvm; rm -r /var/lib/lumi-testvm
+- name: QEMU/KVM for the rebuild test VM
+  hosts: "{{ target | default('all') }}"
+  become: true
+  vars:
+    qemu_packages: [qemu-system-x86, qemu-utils, cloud-image-utils]
+    qemu_user: node-1
+    qemu_dir: /var/lib/lumi-testvm
+  tasks:
+    - name: Hardware virtualisation is available (/dev/kvm)
+      ansible.builtin.stat:
+        path: /dev/kvm
+      register: qemu_kvm_dev
+      failed_when: not qemu_kvm_dev.stat.exists
+      # without it QEMU would fall back to software emulation, far too slow for a rebuild
+
+    # install_recommends is off: the VM is headless, and the recommended packages bring a desktop/graphics stack (SDL, JACK, virgl,
+    # ubuntu-virt, ...) that has no place on this server.
+    - name: QEMU packages (Ubuntu repository versions, not pinned)
+      ansible.builtin.apt:
+        name: "{{ qemu_packages }}"
+        state: present
+        install_recommends: false
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: The kvm group exists
+      ansible.builtin.getent:
+        database: group
+        key: kvm
+
+    - name: The VM user can use /dev/kvm (member of group kvm)
+      ansible.builtin.user:
+        name: "{{ qemu_user }}"
+        groups: kvm
+        append: true
+
+    - name: Folder for VM disks and cloud images (not in any backup, everything in it can be recreated)
+      ansible.builtin.file:
+        path: "{{ qemu_dir }}"
+        state: directory
+        owner: "{{ qemu_user }}"
+        group: "{{ qemu_user }}"
+        mode: "0750"
+
+    - name: Reminder
+      ansible.builtin.debug:
+        msg: >-
+          {{ qemu_user }} needs a new login session (or 'sg kvm -c ...') before /dev/kvm is usable.
+          Nothing was started and no network device was configured.
