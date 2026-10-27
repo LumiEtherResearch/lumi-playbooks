@@ -1,47 +1,83 @@
 ---
-# Clone the application repositories into the developer workspaces on a NEW server.
+# Clone the application repositories onto a NEW server, where they really live, and recreate the shared bind mount.
 #
-# Input: workspace_repos, a list of { developer, path, repo }. It is deliberately not in this (public) repository: the list
-# lives in the private infra-bootstrap repository (bootstrap/workspaces.yml) and is passed in as extra variables by the
-# rebuild script, so nothing here names a private repository.
+# How the workspaces work on node-2 (this play reproduces it, it does not change it):
+#   - each developer works in his HOME: /home/<developer>/<repo>
+#   - lumiether-expose-repos.timer (configure_plum_readonly.yml) bind-mounts every top-level git repo of a home, READ-ONLY, into
+#     /srv/lumiether/workspaces/<developer>/<repo> so Plum can read it. It never covers a real folder that has content.
+#   - one shared checkout lives in /srv/lumiether/workspaces/<repo>, owned by node-1; an /etc/fstab bind mount shows it
+#     read-only in a developer's workspace (workspace_bind_mounts).
+# So repositories are cloned into the HOME (or the shared root), never into /srv/lumiether/workspaces/<developer>/.
 #
-# Safe on a server that already has the checkouts: a directory that already exists is never touched (update: false), so
-# this play only fills in what is missing. It does not restore uncommitted changes and does not create the
-# <developer>_main branches (configure_workspace_map.yml does that afterwards).
+# Input (extra variables; the lists live in the private infra-bootstrap repo, bootstrap/workspaces.yml, nothing here names a
+# private repository):
+#   workspace_repos        list of { developer, path, repo }; developer is the OWNER of the checkout (node-1 for the shared one);
+#                          path must be a direct child of /home/<developer> or of workspaces_root
+#   workspace_bind_mounts  list of { src, dest }, both inside workspaces_root: written to /etc/fstab and mounted read-only
 #
-# Private GitHub repositories are cloned over SSH with a read-only key in /etc/lumiether/deploy-keys/workspaces. That key
-# is a secret: it is not in Git and not created here. It is restored from the encrypted secrets backup, or created by a
-# human (a read-only machine user or deploy keys with access to the repositories). The play stops with a clear message if
-# a repository needs it and it is missing. Repositories cloned over https (public ones) need no key.
+# Safe on a server that already has the checkouts: an existing directory is never touched (update: false), so this only fills
+# in what is missing. It does not restore uncommitted changes (scripts/restore.sh workspace-wip does) and does not create
+# branches. Private GitHub repositories are cloned over SSH with a read-only key in /etc/lumiether/deploy-keys/workspaces: a
+# secret, not in Git and not created here; the play stops with a clear message if a repository needs it and it is missing.
 #
-# Order on a new server: provision_developer.yml (accounts) -> configure_plum_isolation.yml (workspace directories and
-# ACLs) -> THIS play -> configure_workspace_map.yml (branches).
-# Idempotent. Rollback: delete the checkout you do not want; nothing else is changed.
-- name: Clone developer workspace repositories
+# Order on a new server: provision_developer.yml (accounts and homes) -> configure_plum_isolation.yml (the per-developer
+# workspace folders) -> THIS play -> (the expose timer then mounts the home repositories on its own).
+# Idempotent. Rollback: delete the checkout / remove the fstab line; nothing else is changed.
+- name: Clone developer repositories and recreate the shared workspace mount
   hosts: "{{ target | default('all') }}"
   become: true
   vars:
     workspace_repos: []
+    workspace_bind_mounts: []
     workspaces_key: /etc/lumiether/deploy-keys/workspaces
     workspaces_root: /srv/lumiether/workspaces
+    workspaces_root_owner: node-1
+    workspace_fstab: /etc/fstab
   tasks:
     - name: Nothing to do without a repository list
       ansible.builtin.debug:
         msg: "workspace_repos is empty: pass it as extra variables (infra-bootstrap/bootstrap/workspaces.yml)"
-      when: workspace_repos | length == 0
+      when: workspace_repos | length == 0 and workspace_bind_mounts | length == 0
 
-    - name: Every path is inside the workspace root
+    - name: Every checkout is a direct child of the owner's home or of the workspaces root
       ansible.builtin.assert:
         that:
-          - item.path.startswith(workspaces_root ~ '/')
+          - item.developer is defined and item.repo is defined and item.path is defined
           - "'..' not in item.path"
-          - item.developer is defined
-          - item.repo is defined
-        fail_msg: "bad workspace entry: {{ item }}"
+          - (item.path | dirname) in ['/home/' ~ item.developer, workspaces_root]
+          - item.path | basename is match('^[A-Za-z0-9][A-Za-z0-9._-]*$')
+        fail_msg: "bad workspace entry (path must be /home/<developer>/<name> or {{ workspaces_root }}/<name>): {{ item }}"
         quiet: true
       loop: "{{ workspace_repos }}"
       loop_control:
         label: "{{ item.path | default('?') }}"
+
+    - name: Every bind mount stays inside the workspaces root
+      ansible.builtin.assert:
+        that:
+          - item.src is defined and item.dest is defined
+          - "'..' not in item.src and '..' not in item.dest"
+          - item.src.startswith(workspaces_root ~ '/') and item.dest.startswith(workspaces_root ~ '/')
+          - item.src != item.dest
+          - "' ' not in item.src and ' ' not in item.dest"
+        fail_msg: "bad bind mount entry: {{ item }}"
+        quiet: true
+      loop: "{{ workspace_bind_mounts }}"
+      loop_control:
+        label: "{{ item.dest | default('?') }}"
+
+    - name: Existing accounts
+      ansible.builtin.getent:
+        database: passwd
+
+    - name: The owners exist (provision_developer.yml creates the developers)
+      ansible.builtin.assert:
+        that: item.developer in getent_passwd
+        fail_msg: "user {{ item.developer }} does not exist yet: run provision_developer.yml first"
+        quiet: true
+      loop: "{{ workspace_repos }}"
+      loop_control:
+        label: "{{ item.developer }}"
 
     - name: Repositories that need the SSH key
       ansible.builtin.set_fact:
@@ -63,17 +99,23 @@
         success_msg: "key present (contents not read)"
       when: workspaces_need_key | bool
 
-    # Normally created by configure_plum_isolation.yml (which also sets the ACLs); a missing one is created with the same owner and mode.
-    - name: The developer's workspace directory exists
-      ansible.builtin.file:
-        path: "{{ workspaces_root }}/{{ item.developer }}"
-        state: directory
-        owner: "{{ item.developer }}"
-        group: "{{ item.developer }}"
-        mode: "0770"
-      loop: "{{ workspace_repos }}"
+    - name: Home directories of the owners exist
+      ansible.builtin.stat:
+        path: "/home/{{ item.developer }}"
+      register: workspace_homes
+      loop: "{{ workspace_repos | selectattr('path', 'match', '^/home/') | list }}"
       loop_control:
         label: "{{ item.developer }}"
+      failed_when: not workspace_homes.stat.exists | default(false)
+
+    - name: The shared workspaces root exists (same owner and mode as on node-2)
+      ansible.builtin.file:
+        path: "{{ workspaces_root }}"
+        state: directory
+        owner: "{{ workspaces_root_owner }}"
+        group: "{{ workspaces_root_owner }}"
+        mode: "0755"
+      when: (workspace_repos | selectattr('path', 'match', '^' ~ workspaces_root ~ '/') | list | length > 0) or workspace_bind_mounts | length > 0
 
     - name: Clone what is missing (existing checkouts are left exactly as they are)
       ansible.builtin.git:
@@ -85,9 +127,9 @@
       register: workspace_clone
       loop: "{{ workspace_repos }}"
       loop_control:
-        label: "{{ item.path | basename }} ({{ item.developer }})"
+        label: "{{ item.path }} ({{ item.developer }})"
 
-    - name: Freshly cloned checkouts belong to the developer
+    - name: Freshly cloned checkouts belong to their owner
       ansible.builtin.file:
         path: "{{ item.item.path }}"
         state: directory
@@ -96,7 +138,7 @@
         group: "{{ item.item.developer }}"
       loop: "{{ workspace_clone.results }}"
       loop_control:
-        label: "{{ item.item.path | basename }}"
+        label: "{{ item.item.path }}"
       when: item is changed and not ansible_check_mode
 
     - name: Freshly cloned top directories are group-writable like the existing ones (775)
@@ -106,11 +148,66 @@
         mode: "0775"
       loop: "{{ workspace_clone.results }}"
       loop_control:
-        label: "{{ item.item.path | basename }}"
+        label: "{{ item.item.path }}"
       when: item is changed and not ansible_check_mode
+
+    - name: The folder that holds each mount point exists (created by configure_plum_isolation.yml)
+      ansible.builtin.stat:
+        path: "{{ item.dest | dirname }}"
+      register: workspace_mount_parent
+      loop: "{{ workspace_bind_mounts }}"
+      loop_control:
+        label: "{{ item.dest }}"
+      failed_when: not workspace_mount_parent.stat.exists | default(false)
+
+    # No owner/group/mode here on purpose: if the mount point is already a mount, those would change the mounted directory itself.
+    - name: Mount points exist
+      ansible.builtin.file:
+        path: "{{ item.dest }}"
+        state: directory
+      loop: "{{ workspace_bind_mounts }}"
+      loop_control:
+        label: "{{ item.dest }}"
+
+    - name: fstab lines for the shared read-only bind mounts
+      ansible.builtin.lineinfile:
+        path: "{{ workspace_fstab }}"
+        regexp: '^{{ item.src | regex_escape }}\s+{{ item.dest | regex_escape }}\s'
+        line: "{{ item.src }} {{ item.dest }} none bind,ro,nofail 0 0"
+      loop: "{{ workspace_bind_mounts }}"
+      loop_control:
+        label: "{{ item.dest }}"
+
+    # The expose timer may already have mounted a different directory (the developer's own home copy) at the mount point.
+    # A mount that already shows the right directory is left alone; a wrong one is replaced.
+    - name: The mounts are active and show the right directory
+      ansible.builtin.shell: |
+        same() { [ "$(stat -c %d:%i "$1")" = "$(stat -c %d:%i "$2")" ]; }
+        if mountpoint -q "$DEST"; then
+          if same "$SRC" "$DEST"; then echo "ok: $DEST already shows $SRC"; exit 0; fi
+          [ "$CHECK" = 1 ] && { echo "CHANGED: would replace the mount at $DEST (it shows another directory)"; exit 0; }
+          umount "$DEST" || exit 1
+        fi
+        [ "$CHECK" = 1 ] && { echo "CHANGED: would mount $SRC at $DEST"; exit 0; }
+        mount -T "$FSTAB" "$DEST" && echo "CHANGED: mounted $SRC at $DEST"
+      args:
+        executable: /bin/bash
+      environment:
+        SRC: "{{ item.src }}"
+        DEST: "{{ item.dest }}"
+        FSTAB: "{{ workspace_fstab }}"
+        CHECK: "{{ 1 if ansible_check_mode else 0 }}"
+      register: workspace_mounts
+      changed_when: "'CHANGED:' in workspace_mounts.stdout"
+      check_mode: false
+      loop: "{{ workspace_bind_mounts }}"
+      loop_control:
+        label: "{{ item.dest }}"
 
     - name: Summary
       ansible.builtin.debug:
         msg: >-
-          cloned {{ workspace_clone.results | selectattr('changed') | list | length }} of
-          {{ workspace_repos | length }} repositories; the rest already existed
+          cloned {{ workspace_clone.results | default([]) | selectattr('changed') | list | length }} of
+          {{ workspace_repos | length }} repositories (the rest already existed);
+          {{ workspace_mounts.results | default([]) | selectattr('changed') | list | length }} of
+          {{ workspace_bind_mounts | length }} shared mounts changed
