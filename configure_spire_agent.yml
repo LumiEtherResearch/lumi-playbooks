@@ -16,16 +16,11 @@
 - name: SPIRE agent self-healing start
   hosts: "{{ target | default('all') }}"
   become: true
+  vars_files:
+    - vars/spire.yml   # trust domain, agent dir/socket, token file and the workload entries (shared with configure_spire_oidc.yml)
   vars:
-    spire_agent_dir: /opt/spire-agent
-    spire_trust_domain_uri: spiffe://lumietherresearch.com
-    spire_agent_socket: /run/spire/agent-sockets/api.sock
-    spire_workload_entries:
-      - { id: 7ad6d15f-b358-4b33-9168-dc3606e29c91, spiffe: oidc-discovery-provider, selector: "unix:user:spire-oidc" }
-      - { id: 9d12fa2d-90a6-44f9-86db-20e7bfae719b, spiffe: vibe, selector: "unix:user:node-1" }
-    spire_restart_after: [spire-oidc, vibe-token]
+    spire_restart_after: [spire-oidc, vibe-token]   # units created by configure_spire_oidc.yml
     spire_selfheal_src: "{{ playbook_dir }}/docker/spire-agent"
-    spire_token_file: /home/node-1/.config/vibe/sa-token
     # false only for tests without systemd/docker
     spire_selfheal_manage_services: true
   tasks:
