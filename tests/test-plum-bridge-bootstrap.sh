@@ -74,5 +74,22 @@ sudo -n rm -f "$BR" "$BR.bak-pre-readonly"; run D --check; rc=$?
 chk "succeeds in check mode"                                                 '[[ $rc -eq 0 ]]'
 chk "creates nothing"                                                        '[[ ! -e $BR && ! -e $BR.bak-pre-readonly ]]'
 
+echo "== E. bubblewrap: installed by the play (apt), not a precondition"
+python3 -I - "$R" "$W/play-bwrap.yml" "$W/no-such-bwrap" <<'PY'
+import sys, yaml
+root, out, bwrap = sys.argv[1:4]
+plays = yaml.safe_load(open(f"{root}/configure_plum_readonly.yml"))
+sel = [t for p in plays for t in (p.get("tasks") or []) if str(t.get("name", "")).startswith("bubblewrap is installed")]
+yaml.safe_dump([{"hosts": "localhost", "connection": "local", "gather_facts": False, "become": True,
+                 "vars": {"bwrap_bin": bwrap}, "tasks": sel}], open(out, "w"))
+print(len(sel), "task selected")
+PY
+chk "the task installs the package with the apt module (state present)"     'python3 -I -c "import sys,yaml; t=yaml.safe_load(open(sys.argv[1]))[0][\"tasks\"][0]; a=t.get(\"ansible.builtin.apt\") or {}; sys.exit(0 if a.get(\"name\")==\"bubblewrap\" and a.get(\"state\")==\"present\" else 1)" "$W/play-bwrap.yml"'
+"$AP" -i localhost, --check "$W/play-bwrap.yml" >"$W/out.E" 2>&1; rc=$?
+[[ $rc -eq 0 ]] || grep -h -E 'fatal:|"msg"' "$W/out.E" | head -2 | cut -c1-220 | sed 's/^/        | /'
+chk "check mode succeeds although bwrap_bin points at a file that does not exist"  '[[ $rc -eq 0 ]]'
+if dpkg -s bubblewrap 2>/dev/null | grep -q "^Status: install ok installed"; then want=0; else want=1; fi
+chk "check mode reports changed=$want, failed=0 (the package is $([[ $want -eq 0 ]] && echo installed || echo missing) on this machine)"  'grep -Eq "changed=$want +unreachable=0 +failed=0" "$W/out.E"'
+
 echo; echo "RESULT: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]
