@@ -22,11 +22,11 @@
     chat_src: "{{ playbook_dir }}/docker/vibe-cbm/lumiether/chat"
     base_prompt_src: "{{ playbook_dir }}/docker/vibe-cbm/lumiether/prompts/lumiether-codebase-first.md"
   tasks:
+    # The sandbox of the bridge script (tasks/plum_readonly_user.yml) needs {{ bwrap_bin }}; a new server does not have it.
     - name: bubblewrap is installed
-      ansible.builtin.stat:
-        path: "{{ bwrap_bin }}"
-      register: bwrap_stat
-      failed_when: not bwrap_stat.stat.exists
+      ansible.builtin.apt:
+        name: bubblewrap
+        state: present
 
     - name: Directory for the LUMIANS vision tool
       ansible.builtin.file:
@@ -50,6 +50,12 @@
       loop_control:
         loop_var: pr
 
+    # On a new server there is no previous script to keep (node-2 had a hand-made one).
+    - name: Is there a bridge script already?
+      ansible.builtin.stat:
+        path: "{{ bridge_cmd }}"
+      register: bridge_present
+
     - name: Keep the current bridge script once
       ansible.builtin.copy:
         src: "{{ bridge_cmd }}"
@@ -57,6 +63,7 @@
         remote_src: true
         force: false
         mode: preserve
+      when: bridge_present.stat.exists
 
     - name: Install the read-only sandboxed bridge script
       ansible.builtin.copy:

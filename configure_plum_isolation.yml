@@ -19,11 +19,17 @@
     plum_base: /srv
     known_hosts_src: /srv/plum/config/kimi/vibe-bridge/known_hosts
   tasks:
-    - name: Bridge forced command exists
+    # The forced command is only a path in each developer's authorized_keys line. On a new server the script does not exist yet:
+    # configure_plum_readonly.yml, imported at the end of this playbook, installs it. So this is a notice, not a precondition.
+    - name: Bridge forced command (the script itself is installed by configure_plum_readonly.yml below)
       ansible.builtin.stat:
         path: "{{ bridge_cmd }}"
       register: bridge_stat
-      failed_when: not bridge_stat.stat.exists
+
+    - name: Bridge script not installed yet (expected on a new server)
+      ansible.builtin.debug:
+        msg: "{{ bridge_cmd }} does not exist yet; configure_plum_readonly.yml installs it later in this run."
+      when: not bridge_stat.stat.exists
 
     - name: Workspace root and the existing Plum known_hosts exist
       ansible.builtin.stat:
