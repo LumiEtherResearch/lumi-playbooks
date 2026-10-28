@@ -55,6 +55,8 @@ say() { echo "== $*" >&2; }
 
 # shellcheck source=lib/workspace-wip.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib/workspace-wip.sh"
+# shellcheck source=lib/archive-check.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/archive-check.sh"
 
 MODE=run
 case "${1:-}" in
@@ -197,9 +199,16 @@ ask_pass SEC_PW secrets
 [[ $DATA_PW != "$SEC_PW" ]] || die "the two passphrases must differ"
 setup_stage
 
-verify_archive() { # verify_archive PASSVAR FILE  (decrypt and read the whole archive)
-  say "verifying $(basename "$2")"
-  decrypt "$1" "$2" | zstd -dcq | tar -tf - >/dev/null
+verify_archive() { # verify_archive PASSVAR FILE [REQUIRED_PATH...]  (decrypt and read the whole archive; the paths must be in it)
+  local pw=$1 file=$2 listing missing
+  shift 2
+  say "verifying $(basename "$file")"
+  listing=$(decrypt "$pw" "$file" | zstd -dcq | tar -tf -)
+  [[ $# -eq 0 ]] && return 0
+  if ! missing=$(printf '%s\n' "$listing" | archive_missing "$@"); then
+    die "$(basename "$file") is missing: $(printf '%s' "$missing" | tr '\n' ' ')"
+  fi
+  say "all $# required paths are in $(basename "$file")"
 }
 
 finish_archive() { # finish_archive FILE  (rename .partial, write checksum)
@@ -299,7 +308,7 @@ mkdir "$STAGE/secrets"
 SEC_OUT=$OUT/lumi-secrets-$TS.tar.zst.gpg
 sudo tar --numeric-owner -C "$STAGE/secrets" -cf - SECRETS.sha256 -C / "${SECRET_PATHS[@]}" \
   | zstd -q -T0 -10 | encrypt SEC_PW "$SEC_OUT.partial"
-verify_archive SEC_PW "$SEC_OUT.partial"
+verify_archive SEC_PW "$SEC_OUT.partial" SECRETS.sha256 "${SECRET_PATHS[@]}"
 finish_archive "$SEC_OUT"
 
 say "done"

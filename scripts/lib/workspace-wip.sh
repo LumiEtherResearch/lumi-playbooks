@@ -42,17 +42,21 @@ _wip_git() { # _wip_git REPO git-args...
 # GIT_OPTIONAL_LOCKS=0 (git 2.53; only `git status` and the plumbing commands honor it). Run as root that leaves a developer's
 # .git/index owned by root and breaks their git. So diffs always run against a throwaway COPY of the index: the refresh lands
 # in the copy, the real index is never opened for writing.
+# The copy lives in a PRIVATE directory (mktemp -d): git, running as root, replaces the copy with a new root-owned file, and
+# a loose root-owned file in the sticky /tmp could not be removed by the caller ("Operation not permitted"; under `set -e` that
+# aborted backup.sh half way). In a directory the caller owns it can. The cleanup can never change the result: `|| true`.
 _wip_diff() { # _wip_diff REPO diff-args...
-  local repo=$1 idx tmp rc p; shift
+  local repo=$1 idx dir tmp rc p; shift
   idx=$(_wip_git "$repo" rev-parse --git-path index 2>/dev/null) || return 1
   [[ $idx == /* ]] || idx=$repo/$idx
-  tmp=$(mktemp) || return 1
-  if ! _wip_sudo cat "$idx" > "$tmp" 2>/dev/null || [[ ! -s $tmp ]]; then rm -f "$tmp"; return 1; fi
+  dir=$(mktemp -d) || return 1
+  tmp=$dir/index
+  if ! _wip_sudo cat "$idx" > "$tmp" 2>/dev/null || [[ ! -s $tmp ]]; then rm -rf "$dir" || true; return 1; fi
   p=$(_wip_prefix)
   # shellcheck disable=SC2086
   $p env GIT_OPTIONAL_LOCKS=0 GIT_INDEX_FILE="$tmp" git -c safe.directory='*' -C "$repo" diff "$@"
   rc=$?
-  rm -f "$tmp"
+  rm -rf "$dir" || true
   return $rc
 }
 
@@ -110,7 +114,7 @@ wip_summary() { # wip_summary SOURCE...
 wip_capture() { # wip_capture DEST SOURCE...
   local dest=$1; shift
   local cap=${WIP_MAX_UNTRACKED_MB:-100}
-  local repo rel out facts head branch dirty untracked unpushed stash remote status list size captured=0 clean=0 skipped=0
+  local repo rel out facts head branch dirty untracked unpushed stash remote status list listdir size captured=0 clean=0 skipped=0
   mkdir -p "$dest"
   : > "$dest/INDEX.tsv"
   : > "$dest/SKIPPED.txt"
@@ -125,10 +129,10 @@ wip_capture() { # wip_capture DEST SOURCE...
         _wip_diff "$repo" HEAD --binary > "$out/wip.patch"
       fi
       if (( untracked > 0 )); then
-        list=$(mktemp)
+        listdir=$(mktemp -d); list=$listdir/untracked.list
         _wip_git "$repo" ls-files --others --exclude-standard -z > "$list"
         _wip_sudo tar -C "$repo" --null -T "$list" -cf - > "$out/untracked.tar" 2>/dev/null || true
-        rm -f "$list"
+        rm -rf "$listdir" || true
         size=$(stat -c %s "$out/untracked.tar")
         if (( size > cap * 1024 * 1024 )); then
           rm -f "$out/untracked.tar"
