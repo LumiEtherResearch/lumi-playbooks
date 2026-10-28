@@ -50,6 +50,12 @@
       loop_control:
         loop_var: pr
 
+    # On a new server there is no previous script to keep (node-2 had a hand-made one).
+    - name: Is there a bridge script already?
+      ansible.builtin.stat:
+        path: "{{ bridge_cmd }}"
+      register: bridge_present
+
     - name: Keep the current bridge script once
       ansible.builtin.copy:
         src: "{{ bridge_cmd }}"
@@ -57,6 +63,7 @@
         remote_src: true
         force: false
         mode: preserve
+      when: bridge_present.stat.exists
 
     - name: Install the read-only sandboxed bridge script
       ansible.builtin.copy:
