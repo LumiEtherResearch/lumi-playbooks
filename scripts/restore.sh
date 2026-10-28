@@ -29,6 +29,8 @@ usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 # shellcheck source=lib/workspace-wip.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib/workspace-wip.sh"
+# shellcheck source=lib/archive-check.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/archive-check.sh"
 
 [[ $EUID -ne 0 ]] || die "run as the normal user (uses sudo where needed), not root"
 sudo -n true 2>/dev/null || die "need passwordless sudo"
@@ -61,7 +63,7 @@ cmd_verify() {
   if [[ $f == *lumi-data-* ]]; then
     decrypt PW "$f" | zstd -dcq | tar -xOf - ./META.txt
   else
-    decrypt PW "$f" | zstd -dcq | tar -tf - | head -n 20
+    decrypt PW "$f" | zstd -dcq | tar -tf - | archive_show_listing
   fi
 }
 
