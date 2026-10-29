@@ -90,21 +90,68 @@
       when: not ansible_check_mode
 
     # Plum answers questions about code, so it uses the larger model. VS Code Vibe (~/.vibe) is not touched.
-    - name: "{{ pr }}: Plum config has a models list that can be extended"
-      ansible.builtin.shell: >-
-        grep -q '^models = \[' {{ pr_home }}/.vibe-plum/config.toml &&
-        grep -q 'provider = "wif-local"' {{ pr_home }}/.vibe-plum/config.toml
+    # Plum's config is a copy of the user's normal config. On node-2 that has a provider and a models list (added by hand), and the Plum
+    # model is inserted into that inline list. On a new server nothing creates them (merge-config.py manages only default_agent and the
+    # mcp_servers blocks), so Plum's config gets its own provider and models in a marked block. Anything else is not guessed at.
+    - name: "{{ pr }}: Plum config models state (none = a new server, inline = like node-2, managed = this play's block)"
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/python3
+          - -c
+          - |
+            import re, sys, tomllib
+            text = open(sys.argv[1], encoding="utf-8").read()
+            c = tomllib.loads(text)
+            provs = c.get("providers", [])
+            has_p = isinstance(provs, list) and any(p.get("name") == sys.argv[2] for p in provs)
+            if "# BEGIN PLUM PROVIDER AND MODELS" in text: print("managed")
+            elif "providers" not in c and "models" not in c: print("none")
+            elif has_p and c.get("models") and re.search(r"(?m)^models = \[", text): print("inline")
+            else: print("other")
+          - "{{ pr_home }}/.vibe-plum/config.toml"
+          - "{{ plum_provider_name }}"
+      register: pr_models
       changed_when: false
       check_mode: false
       when: not ansible_check_mode
+
+    - name: "{{ pr }}: Plum config models are in a form this play does not extend"
+      ansible.builtin.fail:
+        msg: >-
+          {{ pr_home }}/.vibe-plum/config.toml (seeded from {{ pr_home }}/.vibe/config.toml) has providers and/or models, but not a
+          provider named {{ plum_provider_name }} together with an inline `models = [` list, and none of them from this play. Add the provider
+          and the models to ~/.vibe/config.toml (or fix the Plum copy) so that both exist; nothing was changed.
+      when: not ansible_check_mode and (pr_models.stdout | trim) == 'other'
+
+    - name: "{{ pr }}: Plum provider and models for a new server (the normal Vibe config has none)"
+      ansible.builtin.blockinfile:
+        path: "{{ pr_home }}/.vibe-plum/config.toml"
+        marker: "# {mark} PLUM PROVIDER AND MODELS"
+        insertafter: EOF
+        block: |
+          [[providers]]
+          name = "{{ plum_provider_name }}"
+          api_base = "{{ plum_provider_api_base }}"
+          backend = "generic"
+
+          [[models]]
+          name = "{{ plum_base_model_name }}"
+          provider = "{{ plum_provider_name }}"
+          alias = "{{ plum_base_model_alias }}"
+
+          [[models]]
+          name = "{{ plum_model_name }}"
+          provider = "{{ plum_provider_name }}"
+          alias = "{{ plum_model_alias }}"
+      when: not ansible_check_mode and (pr_models.stdout | trim) in ['none', 'managed']
 
     - name: "{{ pr }}: Plum model {{ plum_model_alias }} is defined"
       ansible.builtin.lineinfile:
         path: "{{ pr_home }}/.vibe-plum/config.toml"
         regexp: '^\s*\{ name = "{{ plum_model_name }}"'
         insertafter: '^models = \['
-        line: '    { name = "{{ plum_model_name }}", provider = "wif-local", alias = "{{ plum_model_alias }}" },'
-      when: not ansible_check_mode
+        line: '    { name = "{{ plum_model_name }}", provider = "{{ plum_provider_name }}", alias = "{{ plum_model_alias }}" },'
+      when: not ansible_check_mode and (pr_models.stdout | trim) == 'inline'
 
     - name: "{{ pr }}: Plum uses {{ plum_model_alias }}"
       ansible.builtin.lineinfile:
@@ -118,6 +165,19 @@
       ansible.builtin.shell: >-
         test "$(grep -c '^active_model' {{ pr_home }}/.vibe-plum/config.toml)" = 1 &&
         grep -q '^active_model = "{{ plum_model_alias }}"$' {{ pr_home }}/.vibe-plum/config.toml
+      changed_when: false
+      check_mode: false
+      when: not ansible_check_mode
+
+    - name: "{{ pr }}: Plum config verified: provider {{ plum_provider_name }} and model {{ plum_model_alias }}"
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/python3
+          - -c
+          - "import sys,tomllib; c=tomllib.load(open(sys.argv[1],'rb')); ok=any(p.get('name')==sys.argv[2] for p in c.get('providers',[])) and any(m.get('alias')==sys.argv[3] and m.get('provider')==sys.argv[2] for m in c.get('models',[])); sys.exit(0 if ok else 1)"
+          - "{{ pr_home }}/.vibe-plum/config.toml"
+          - "{{ plum_provider_name }}"
+          - "{{ plum_model_alias }}"
       changed_when: false
       check_mode: false
       when: not ansible_check_mode
