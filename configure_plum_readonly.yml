@@ -17,6 +17,12 @@
     plum_repo_users: [abhi, anish, arun]
     plum_model_name: mistral-large-2512
     plum_model_alias: mistral-large
+    # For a user whose normal Vibe config has no provider and no models (a new server; on node-2 they were added by hand), Plum's config gets
+    # these: the host adapter (configure_wif_adapter.yml: 127.0.0.1:8090, no key) and the two models.
+    plum_provider_name: wif-local
+    plum_provider_api_base: http://127.0.0.1:8090/v1
+    plum_base_model_name: mistral-small-2603
+    plum_base_model_alias: mistral-small-4
     bridge_cmd: /usr/local/bin/vibe-acp-bridge
     bwrap_bin: /usr/bin/bwrap
     chat_src: "{{ playbook_dir }}/docker/vibe-cbm/lumiether/chat"
