@@ -9,6 +9,8 @@
 # Components for a data archive:  tofu-state plum-pg awx-pg portainer spire cbm srv-plum lumiether-data workspace-wip
 #   lumiether-data  Engineering Memory and Plan Registry (/srv/lumiether)
 #   workspace-wip   uncommitted work saved from the developers' home checkouts and the shared ones: applied onto checkouts that are already cloned
+#   plum-pg         the four pg_dumpall files. Targets that already hold tables (the Plum apps create their schema on first start) are refused unless
+#                   REPLACE=1: then each app container is stopped, its databases dropped, the dump loaded and the app started again (if it was running)
 # Component for a secrets archive: secrets
 #
 # Nothing is overwritten without typing the component name. Existing files are renamed
@@ -25,7 +27,7 @@ AWX_POD=awx-demo-postgres-15-0
 
 die() { echo "restore.sh: $*" >&2; exit 1; }
 say() { echo "== $*" >&2; }
-usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0" >&2; exit 2; }
 
 # shellcheck source=lib/workspace-wip.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib/workspace-wip.sh"
@@ -96,15 +98,22 @@ pg_tables_in() { # pg_tables_in EXEC...  -> number of user tables across all dat
   echo "$n"
 }
 
-load_pg() { # load_pg DUMP EXEC...  (EXEC must include -i)
-  local dump=$1 n; shift
+drop_databases() { # drop_databases EXEC...  drops every database except postgres and the templates (open connections are closed)
+  local dbs db
+  dbs=$("$@" sh -c 'psql -U "$POSTGRES_USER" -d postgres -Atc "$1"' _ 'select datname from pg_database where not datistemplate and datname <> $$postgres$$' </dev/null)
+  for db in $dbs; do
+    [[ $db != *\"* ]] || die "refusing to drop a database with a double quote in its name: $db"
+    "$@" sh -c 'psql -U "$POSTGRES_USER" -d postgres -Atc "$1"' _ "DROP DATABASE \"$db\" WITH (FORCE)" </dev/null >/dev/null
+  done
+}
+
+load_pg() { # load_pg DUMP EXEC...  (EXEC must include -i)  Dies on any SQL error except the expected "already exists" ones.
+  local dump=$1 err bad; shift
   [[ -f $dump ]] || die "missing $dump"
-  n=$(pg_tables_in "$@")
-  if [[ $n -gt 0 && ${FORCE:-0} != 1 ]]; then
-    die "target already has $n user tables; drop its databases first or rerun with FORCE=1"
-  fi
-  # Errors like "role already exists" are expected on a freshly initialised cluster.
-  zstd -dcq "$dump" | "$@" sh -c 'psql -U "$POSTGRES_USER" -d postgres -q'
+  err=$(zstd -dcq "$dump" | "$@" sh -c 'psql -U "$POSTGRES_USER" -d postgres -q' 2>&1 >/dev/null) || die "psql could not load $dump"
+  # the superuser role and the postgres/template databases exist on every freshly initialised cluster
+  bad=$(grep -E '^(psql:.*)?ERROR:' <<<"$err" | grep -v -E 'role "[^"]+" already exists|database "(postgres|template0|template1)" already exists' || true)
+  [[ -z $bad ]] || die "loading $dump failed:"$'\n'"$(head -n 5 <<<"$bad")"
 }
 
 apply_tofu_state() {
@@ -117,14 +126,30 @@ apply_tofu_state() {
   tar -C "$BOOT" -xpf "$t"
 }
 
+# The Plum apps create their schema the first time they start, so on a new server (portainer-stacks has already run) the databases are
+# never empty. With REPLACE=1 each instance is replaced: its app container is stopped, its databases are dropped, the pg_dumpall file
+# is loaded, and the app is started again (only if it was running). Without REPLACE=1 nothing is touched when tables exist.
 apply_plum_pg() {
-  local f c
-  confirm plum-pg "Load the four plum pg_dumpall files into the running plum*-postgres containers (they must be freshly initialised)."
+  local f c app n was_running
+  confirm plum-pg "Replace the databases of the four plum*-postgres containers with the pg_dumpall files. Each app container (plum, plum-abhi, ...) is stopped first and started again afterwards. With REPLACE=1 the existing databases are DROPPED."
+  # check all four before changing any
   for f in "$DIR"/pg/plum*-postgres.sql.zst; do
-    c=$(basename "$f" .sql.zst)
+    c=$(basename "$f" .sql.zst); app=${c%-postgres}
     [[ $(docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null) == true ]] || die "container $c is not running"
-    say "loading $c"
+    n=$(pg_tables_in docker exec -i "$c")
+    if [[ $n -gt 0 && ${REPLACE:-0} != 1 ]]; then
+      die "$c already has $n user tables (the app $app created its schema); rerun with REPLACE=1 to stop $app, DROP its databases and load the dump (FORCE=1 does not apply here)"
+    fi
+  done
+  for f in "$DIR"/pg/plum*-postgres.sql.zst; do
+    c=$(basename "$f" .sql.zst); app=${c%-postgres}
+    was_running=0; [[ $(docker inspect -f '{{.State.Running}}' "$app" 2>/dev/null) == true ]] && was_running=1
+    say "replacing the databases of $c (app $app was $([[ $was_running -eq 1 ]] && echo running || echo not running))"
+    [[ $was_running -eq 0 ]] || docker stop -t 30 "$app" >/dev/null
+    [[ $(pg_tables_in docker exec -i "$c") -eq 0 ]] || drop_databases docker exec -i "$c"
     load_pg "$f" docker exec -i "$c"
+    [[ $(pg_tables_in docker exec -i "$c") -gt 0 ]] || die "$c has no tables after the load"
+    [[ $was_running -eq 0 ]] || docker start "$app" >/dev/null
   done
 }
 
