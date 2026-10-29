@@ -3,37 +3,60 @@
   hosts: all
   become: false
   gather_facts: true
+  vars:
+    # Pinned like the system-wide copy (configure_vibe_lumiether.yml) and the vibe-cbm image (docker/vibe-cbm/Dockerfile CBM_VERSION,
+    # CBM_INSTALLER_SHA256). The installer has no version option: it takes the release from CBM_DOWNLOAD_URL (default: the LATEST release),
+    # so the installer script is fetched from the version's TAG (sha256 checked) and CBM_DOWNLOAD_URL points at the same release. To bump:
+    # change these two, the same two in configure_vibe_lumiether.yml, the Dockerfile ARGs and VERIFY_EXPECT_CBM in infra-bootstrap's verify.sh.
+    cbm_version: "0.11.0"
+    cbm_installer_sha256: "13049c7cc51bc508d68b8ecb8a9fd9574ecb7c6f2c9dd5a19bf7d4c187321145"
+    cbm_installer_url: "https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/v{{ cbm_version }}/install.sh"
+    cbm_download_url: "https://github.com/DeusData/codebase-memory-mcp/releases/download/v{{ cbm_version }}"
+    cbm_user_bin: "{{ ansible_env.HOME }}/.local/bin/codebase-memory-mcp"
 
   tasks:
-    - name: Check if codebase-memory-mcp is already installed
-      ansible.builtin.stat:
-        path: "{{ ansible_env.HOME }}/.local/bin/codebase-memory-mcp"
-      register: cbm_check
+    - name: Which Codebase Memory is installed for this user? (rc != 0 = none)
+      ansible.builtin.command: "{{ cbm_user_bin }} --version"
+      register: cbm_installed
+      changed_when: false
+      failed_when: false
+      check_mode: false
 
-    - name: Download official install.sh
-      ansible.builtin.get_url:
-        url: https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh
-        dest: /tmp/cbm-install.sh
-        mode: "0755"
-      when: not cbm_check.stat.exists
+    - name: Install Codebase Memory {{ cbm_version }} for this user (official installer from the tag; skipped when that version is already there)
+      when: cbm_installed.rc != 0 or cbm_version not in cbm_installed.stdout
+      block:
+        - name: Temporary file for the installer
+          ansible.builtin.tempfile:
+            state: file
+            suffix: -cbm-install.sh
+          register: cbm_tmp
 
-    - name: Run official installer (verifies checksum internally)
-      ansible.builtin.command:
-        cmd: /tmp/cbm-install.sh
-      when: not cbm_check.stat.exists
+        - name: Fetch the installer of the pinned tag (sha256 checked)
+          ansible.builtin.get_url:
+            url: "{{ cbm_installer_url }}"
+            dest: "{{ cbm_tmp.path }}"
+            checksum: "sha256:{{ cbm_installer_sha256 }}"
+            mode: "0700"
+            force: true
 
-    - name: Clean up installer script
-      ansible.builtin.file:
-        path: /tmp/cbm-install.sh
-        state: absent
-      when: not cbm_check.stat.exists
+        - name: Run the installer (it downloads and verifies the pinned release)
+          ansible.builtin.command: "bash {{ cbm_tmp.path }} --dir={{ cbm_user_bin | dirname }}"
+          environment:
+            CBM_DOWNLOAD_URL: "{{ cbm_download_url }}"
+      always:
+        - name: Remove the installer
+          ansible.builtin.file:
+            path: "{{ cbm_tmp.path }}"
+            state: absent
+          when: cbm_tmp.path is defined
 
     - name: Verify installation
       ansible.builtin.command:
-        cmd: "{{ ansible_env.HOME }}/.local/bin/codebase-memory-mcp --version"
-      register: cbm_version
+        cmd: "{{ cbm_user_bin }} --version"
+      register: cbm_after
       changed_when: false
+      failed_when: not ansible_check_mode and cbm_version not in cbm_after.stdout
 
     - name: Show installed version
       ansible.builtin.debug:
-        msg: "Installed: {{ cbm_version.stdout }}"
+        msg: "Installed: {{ cbm_after.stdout }}"
