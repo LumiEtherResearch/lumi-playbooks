@@ -5,6 +5,10 @@
   vars:
     vibe_install_dir: /opt/mistral-vibe
     uv_python_install_dir: /opt/uv-python
+    uv_bin: /usr/local/bin/uv
+    # Pinned to what node-2 runs and what the vibe-cbm image installs (docker/vibe-cbm/Dockerfile VIBE_VERSION). To bump: change both,
+    # and VERIFY_EXPECT_VIBE in infra-bootstrap's verify.sh.
+    vibe_pinned: "2.25.8"
 
   tasks:
     - name: Ensure python3 and venv support are installed
@@ -18,7 +22,7 @@
 
     - name: Check if uv is already installed
       ansible.builtin.stat:
-        path: /usr/local/bin/uv
+        path: "{{ uv_bin }}"
       register: uv_check
 
     - name: Install uv (Python package manager used to install Vibe)
@@ -36,14 +40,23 @@
 
     - name: Create shared venv for Vibe
       ansible.builtin.command:
-        cmd: "/usr/local/bin/uv venv {{ vibe_install_dir }} --python 3.12"
+        cmd: "{{ uv_bin }} venv {{ vibe_install_dir }} --python 3.12"
         creates: "{{ vibe_install_dir }}/bin/python"
       environment:
         UV_PYTHON_INSTALL_DIR: "{{ uv_python_install_dir }}"
 
-    - name: Install mistral-vibe into the shared venv
+    - name: Which mistral-vibe is installed in the shared venv? (empty = none)
+      ansible.builtin.shell: >-
+        {{ uv_bin }} pip show --python {{ vibe_install_dir }}/bin/python mistral-vibe 2>/dev/null | sed -n 's/^Version: //p'
+      register: vibe_installed
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Install mistral-vibe into the shared venv (pinned to {{ vibe_pinned }}; skipped when that version is already there)
       ansible.builtin.command:
-        cmd: "/usr/local/bin/uv pip install --python {{ vibe_install_dir }}/bin/python mistral-vibe"
+        cmd: "{{ uv_bin }} pip install --python {{ vibe_install_dir }}/bin/python mistral-vibe=={{ vibe_pinned }}"
+      when: (vibe_installed.stdout | trim) != vibe_pinned
 
     - name: Symlink vibe onto PATH for all users
       ansible.builtin.file:
@@ -57,6 +70,7 @@
         cmd: vibe --version
       register: vibe_version
       changed_when: false
+      failed_when: not ansible_check_mode and vibe_pinned not in vibe_version.stdout
 
     - name: Show installed version
       ansible.builtin.debug:
