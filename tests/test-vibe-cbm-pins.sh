@@ -28,12 +28,18 @@ export STUB_STATE=$W/state
 cat > "$W/bin/uv" <<'STUB'
 #!/bin/bash
 # stub uv: `pip show --python P mistral-vibe`, `pip install --python P SPEC...`. State: $STUB_STATE/vibe-version. An unpinned install gets the "latest" (3.0.3).
+# `pip install` fails like a real slow download unless UV_HTTP_TIMEOUT is at least 120 (seconds).
 S=$STUB_STATE; echo "uv $*" >> "$S/uv.log"
 [[ ${1:-} == pip ]] || exit 0; shift; sub=$1; shift
 case $sub in
   show)    [[ -f $S/vibe-version ]] || { echo "warning: Package(s) not found for: mistral-vibe" >&2; exit 1; }
            echo "Name: mistral-vibe"; echo "Version: $(cat "$S/vibe-version")" ;;
-  install) for a; do case $a in mistral-vibe==*) echo "${a#mistral-vibe==}" > "$S/vibe-version" ;; mistral-vibe) echo 3.0.3 > "$S/vibe-version" ;; esac; done
+  install) echo "env UV_HTTP_TIMEOUT=${UV_HTTP_TIMEOUT:-unset}" >> "$S/uv.log"
+           # a slow link, as in the VM: the big wheel needs about 120 s, and uv gives up after UV_HTTP_TIMEOUT seconds (default 30)
+           if [[ ${UV_HTTP_TIMEOUT:-30} -lt 120 ]]; then
+             printf 'error: Failed to download `mistral-vibe==2.25.8`\n  cause: Failed to download distribution due to network timeout. Try increasing UV_HTTP_TIMEOUT (current value: %ss).\n' "${UV_HTTP_TIMEOUT:-30}" >&2; exit 1
+           fi
+           for a; do case $a in mistral-vibe==*) echo "${a#mistral-vibe==}" > "$S/vibe-version" ;; mistral-vibe) echo 3.0.3 > "$S/vibe-version" ;; esac; done
            echo "Installed 1 package" >&2 ;;
 esac
 STUB
@@ -78,11 +84,12 @@ cv = write("cbm", lv, cbm_tasks, {"cbm_bin": f"{w}/bin/codebase-memory-mcp", "cb
 write("cbm-badsum", lv, cbm_tasks, {"cbm_bin": f"{w}/bin/codebase-memory-mcp", "cbm_installer_url": f"file://{w}/server/install.sh",
                                      "cbm_installer_sha256": "0" * 64, "cbm_installer_home": w, "install_cbm": True})
 write("cbm-off", lv, cbm_tasks, {"cbm_bin": f"{w}/bin/codebase-memory-mcp", "cbm_installer_home": w, "install_cbm": False})
-json.dump({"vibe": vv.get("vibe_pinned"), "cbm": cv.get("cbm_version")}, open(f"{w}/pins.json", "w"))
+json.dump({"vibe": vv.get("vibe_pinned"), "cbm": cv.get("cbm_version"), "uvto": str(vv.get("uv_http_timeout", ""))}, open(f"{w}/pins.json", "w"))
 print(len(vibe_tasks), "vibe tasks,", len(cbm_tasks), "codebase-memory tasks selected")
 PY
 PV=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["vibe"] or "")' "$W/pins.json"); PC=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["cbm"] or "")' "$W/pins.json")
-echo "pins read from the playbooks: vibe='${PV:-<none>}' codebase-memory-mcp='${PC:-<none>}'"
+TO=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["uvto"])' "$W/pins.json")
+echo "pins read from the playbooks: vibe='${PV:-<none>}' codebase-memory-mcp='${PC:-<none>}'; uv_http_timeout='${TO:-<none>}'"
 run() { # run NAME PLAYFILE [ansible args]  : output in $W/out.NAME
   local n=$1 f=$2; shift 2
   "$AP" -i localhost, "$@" "$W/$f.yml" >"$W/out.$n" 2>&1; local rc=$?
@@ -106,6 +113,15 @@ chk "the task succeeds and installs mistral-vibe==$PV (not the latest)"      '[[
 chk "the install command names the pinned version"                           'grep -q "mistral-vibe==$PV" "$W/state/uv.log"'
 run V1b vibe; rc=$?
 chk "second run: succeeds, installs nothing, changes nothing"                '[[ $rc -eq 0 && $(installs) -eq 1 ]] && grep -q "changed=0" "$W/out.V1b"'
+
+echo "== V1t. vibe: a slow download (the real failure in the VM: uv's 30 s default timeout against a 54 MiB wheel)"
+chk "the playbook sets uv_http_timeout, at least 300 seconds"                              '[[ -n $TO && $TO -ge 300 ]]'
+chk "the install command runs with UV_HTTP_TIMEOUT=$TO (what the playbook says)"           'grep -qx "env UV_HTTP_TIMEOUT=$TO" "$W/state/uv.log"'
+chk "uv venv (which downloads the Python) and uv pip install both carry the timeout"       'python3 -I -c "
+import sys, yaml
+t = yaml.safe_load(open(sys.argv[1] + \"/install_vibe.yml\"))[0][\"tasks\"]
+need = (\"Create shared venv\", \"Install mistral-vibe into the shared venv\")
+sys.exit(0 if all(any(n in str(x.get(\"name\")) and \"UV_HTTP_TIMEOUT\" in (x.get(\"environment\") or {}) for x in t) for n in need) else 1)" "$R"'
 
 echo "== V2. vibe: another version is installed (3.0.3)"
 reset_vibe 3.0.3; run V2 vibe; rc=$?
