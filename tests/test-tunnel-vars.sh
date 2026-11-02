@@ -55,17 +55,18 @@ def resolve(vs):
 def strings(o):
     if isinstance(o, str): yield o
     elif isinstance(o, dict):
-        for v in o.values(): yield from strings(v)
+        for k, v in o.items():
+            if k not in ("fail_msg", "success_msg"): yield from strings(v)   # the wording of messages may change; the templated settings may not
     elif isinstance(o, list):
         for v in o: yield from strings(v)
 
 KEYS = ("cloudflared_tunnel_id", "cloudflared_ingress", "spire_oidc_domains")
 
-def rendered(path, vs):
+def rendered(path, vs, skip_first=False):
     p = play(path); e = env(); out = []
-    for t in p["tasks"]:
+    for t in (p["tasks"][1:] if skip_first else p["tasks"]):      # the new play's first task is the guard (tested above), not a setting
         for s in strings(t):
-            if any(k in s for k in KEYS):
+            if "{{" in s and any(k in s for k in KEYS):
                 out.append(e.from_string(s).render(**vs))
     return out
 
@@ -89,7 +90,7 @@ elif cmd == "same":        # same OLD NEW EXTRA_FILES... : the new playbook with
     old, new = sys.argv[2], sys.argv[3]; extra = sys.argv[4:]
     vo = resolve(base_vars(old, extra)); keys = {k: vo[k] for k in KEYS if k in vo}
     vn = base_vars(new, extra); vn.update(keys); vn = resolve(vn)
-    a, b = rendered(old, vo), rendered(new, vn)
+    a, b = rendered(old, vo), rendered(new, vn, skip_first=True)
     print("same" if a == b and a else "different(%d vs %d)" % (len(a), len(b)))
 PY
 H() { python3 -I "$W/h.py" "$@" 2>"$W/err"; }

@@ -14,6 +14,13 @@
 # They must exist before this play enables the service. On a new server restore them from the encrypted secrets
 # backup (scripts/restore.sh apply <dir> secrets); the play stops with a message if the credentials file is missing.
 #
+# Required variables (no defaults: a missing value stops the play in its FIRST task, before anything on the host changes):
+#   cloudflared_tunnel_id   the tunnel ID (a lower-case UUID)
+#   cloudflared_ingress     a list of rules: {hostname: <public host name>, service: http://127.0.0.1:<port>}
+# They come from infra-bootstrap: bootstrap/tunnel.yml (the committed default) or the server-local /etc/lumiether/tunnel.yml, which
+# awx-config bakes into the AWX templates lumiether-cloudflared-check and -apply as extra vars (extra vars outrank play vars). Run by hand
+# with: ansible-playbook configure_cloudflared.yml -e cloudflared_tunnel_id=<id> -e '{"cloudflared_ingress":[{"hostname":"<host>","service":"http://127.0.0.1:<port>"}]}'
+#
 # Idempotent. Checked on node-2 (live files are the source for every value below).
 # Bump the version: change cloudflared_version and cloudflared_deb_sha256 together (sha256sum of the release .deb).
 # Rollback: sudo apt-get install --allow-downgrades ./cloudflared_<old>.deb ; sudo systemctl restart cloudflared
@@ -25,15 +32,30 @@
     cloudflared_deb_url: "https://github.com/cloudflare/cloudflared/releases/download/{{ cloudflared_version }}/cloudflared-linux-amd64.deb"
     cloudflared_deb_sha256: "3be76adc4185d36a0bfb4c2dd8663292f0ed363797f2180333b513b43c81d419"
     cloudflared_user: node-1
-    cloudflared_tunnel_id: "452db3bb-8341-4d1f-b890-69d282736bf9"
     cloudflared_protocol: http2
-    cloudflared_ingress:
-      - { hostname: identity.caymas.in, service: "http://127.0.0.1:8082" }
+    # cloudflared_tunnel_id and cloudflared_ingress are REQUIRED and have no default (see the header): the first task checks them
     cloudflared_start_timeout: 180
     cloudflared_creds_dir: "/home/{{ cloudflared_user }}/.cloudflared"
     # false only for tests without systemd
     cloudflared_manage_services: true
   tasks:
+    - name: The tunnel variables are set (from bootstrap/tunnel.yml, through the AWX template)
+      ansible.builtin.assert:
+        that:
+          - cloudflared_tunnel_id is defined
+          - cloudflared_tunnel_id is match('^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+          - cloudflared_ingress is defined
+          - cloudflared_ingress is sequence and cloudflared_ingress is not string and cloudflared_ingress | length > 0
+          - cloudflared_ingress | map(attribute='hostname', default='') | select('match', '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?[.])+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$') | list | length == cloudflared_ingress | length
+          - cloudflared_ingress | map(attribute='service', default='') | select('match', '^http://127[.]0[.]0[.]1:[0-9]+$') | list | length == cloudflared_ingress | length
+        quiet: true
+        fail_msg: >-
+          cloudflared_tunnel_id and cloudflared_ingress are required and missing or invalid (a lower-case tunnel UUID; rules with a
+          public hostname and a service http://127.0.0.1:<port>). They come from bootstrap/tunnel.yml in infra-bootstrap (or the
+          server-local /etc/lumiether/tunnel.yml), baked into the AWX template by awx-config: apply awx-config, or pass them with -e.
+          Nothing was changed on the host.
+        success_msg: "tunnel variables present"
+
     - name: Installed cloudflared version
       ansible.builtin.command: dpkg-query -W -f='${Version}' cloudflared
       register: cloudflared_installed
@@ -77,8 +99,8 @@
         fail_msg: >-
           {{ cloudflared_creds_dir }}/{{ cloudflared_tunnel_id }}.json is missing. It is a secret and is not managed by
           this play. Restore it from the encrypted secrets backup (scripts/restore.sh apply <dir> secrets) or create a
-          new tunnel with 'cloudflared tunnel login' and 'cloudflared tunnel create', then update cloudflared_tunnel_id
-          and the DNS routes.
+          new tunnel with 'cloudflared tunnel login' and 'cloudflared tunnel create' and give its ID and host name to the
+          bootstrap stage 'tunnel' (choice: new), which writes /etc/lumiether/tunnel.yml; then add the DNS route.
         success_msg: "credentials file present (contents not read)"
 
     - name: Config directory

@@ -18,6 +18,11 @@
 # (install_spire_agent.yml, configure_spire_agent.yml) and the tunnel (configure_cloudflared.yml). No secrets are written
 # by this play: the token file is created at run time by vibe-token.service.
 #
+# Required variable (no default: a missing value stops the play in its FIRST task, before anything on the host changes):
+#   spire_oidc_domains   a list of the public host names the OIDC provider serves (the cloudflared ingress host names)
+# It comes from infra-bootstrap: bootstrap/tunnel.yml (or the server-local /etc/lumiether/tunnel.yml), which awx-config bakes into the AWX
+# templates lumiether-spire-oidc-check and -apply as extra vars. By hand: ansible-playbook configure_spire_oidc.yml -e '{"spire_oidc_domains":["<host>"]}'
+#
 # Order on a new server: SPIRE server up -> install_spire_agent.yml -> THIS play -> configure_spire_agent.yml.
 # Idempotent. Values come from the live files on node-2 (checked identical when this play was written).
 # Bump the version: change spire_version, spire_extras_sha256 and spire_oidc_binary_sha256 together.
@@ -36,7 +41,7 @@
     spire_oidc_bin: /usr/local/bin/oidc-discovery-provider
     spire_oidc_user: spire-oidc
     spire_oidc_conf_dir: /opt/spire-oidc/conf
-    spire_oidc_domains: ["identity.caymas.in"]   # must match the cloudflared ingress hostname
+    # spire_oidc_domains is REQUIRED and has no default (see the header): it must match the cloudflared ingress host name
     spire_oidc_listen: "127.0.0.1:8082"          # must match the cloudflared ingress service
     vibe_token_user: node-1
     vibe_token_audience: api-gateway
@@ -44,6 +49,19 @@
     # false only for tests without systemd/docker
     spire_oidc_manage_services: true
   tasks:
+    - name: The tunnel host name is set (from bootstrap/tunnel.yml, through the AWX template)
+      ansible.builtin.assert:
+        that:
+          - spire_oidc_domains is defined
+          - spire_oidc_domains is sequence and spire_oidc_domains is not string and spire_oidc_domains | length > 0
+          - spire_oidc_domains | select('match', '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?[.])+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$') | list | length == spire_oidc_domains | length
+        quiet: true
+        fail_msg: >-
+          spire_oidc_domains is required and missing or invalid (a list of public host names, like app.example.org). It comes from
+          bootstrap/tunnel.yml in infra-bootstrap (or the server-local /etc/lumiether/tunnel.yml), baked into the AWX template by
+          awx-config: apply awx-config, or pass it with -e. Nothing was changed on the host.
+        success_msg: "tunnel host name present"
+
     - name: The SPIRE agent is installed (install_spire_agent.yml)
       ansible.builtin.stat:
         path: "{{ spire_agent_dir }}/bin/spire-agent"
