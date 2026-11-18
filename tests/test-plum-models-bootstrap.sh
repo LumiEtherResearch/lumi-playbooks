@@ -48,9 +48,9 @@ BASE_FRESH='default_agent = "lumiether"
 
 # >>> LUMIETHER MANAGED (tables) >>>
 [[mcp_servers]]
-name = "codebase-memory-mcp"
+name = "example-mcp"
 transport = "stdio"
-command = "/usr/local/bin/codebase-memory-mcp"
+command = "/usr/local/bin/example-mcp"
 args = []
 # <<< LUMIETHER MANAGED (tables) <<<
 
@@ -68,9 +68,9 @@ providers = [
 ]
 
 [[mcp_servers]]
-name = "codebase-memory-mcp"
+name = "example-mcp"
 transport = "stdio"
-command = "/usr/local/bin/codebase-memory-mcp"
+command = "/usr/local/bin/example-mcp"
 args = []
 '
 BASE_PARTIAL='default_agent = "lumiether"
@@ -94,7 +94,7 @@ chk "... the provider points at the host adapter, without a key"              '[
 chk "... both models are defined: the small one and the Plum model"           '[[ $(tomlq "sorted(m[\"alias\"] for m in c[\"models\"])") == "[\"mistral-large\", \"mistral-small-4\"]" ]]'
 chk "... every model uses the provider"                                       '[[ $(tomlq "sorted({m[\"provider\"] for m in c[\"models\"]})") == "[\"wif-local\"]" ]]'
 chk "Plum uses the large model and starts in the chat agent"                  '[[ $(tomlq "[c[\"active_model\"], c[\"default_agent\"]]") == "[\"mistral-large\", \"lumiether-chat\"]" ]]'
-chk "the user's own mcp_servers entry came along"                             '[[ $(tomlq "[s[\"name\"] for s in c[\"mcp_servers\"]]") == "[\"codebase-memory-mcp\"]" ]]'
+chk "the user's own mcp_servers entry came along"                             '[[ $(tomlq "[s[\"name\"] for s in c[\"mcp_servers\"]]") == "[\"example-mcp\"]" ]]'
 run A2; rc=$?
 chk "second run: succeeds and changes nothing"                                '[[ $rc -eq 0 ]] && grep -q "changed=0" "$W/out.A2"'
 chk "... still one provider and two models"                                   '[[ $(tomlq "[len(c[\"providers\"]), len(c[\"models\"])]") == "[1, 2]" ]]'
