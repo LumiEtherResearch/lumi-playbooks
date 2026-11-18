@@ -13,7 +13,7 @@ user-invocable: true
 5. Check architecture and coding conventions.
 6. Check correctness, security and compatibility.
 7. Identify possible regressions.
-8. Examine applicable tests.
+8. Examine applicable tests.
 9. Distinguish confirmed issues from suspected issues.
 10. Report concise, actionable findings with evidence.
 
