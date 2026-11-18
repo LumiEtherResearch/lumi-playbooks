@@ -282,3 +282,68 @@ both before and after source modifications.
 Use ast-grep for SEARCH, FILTER and ANALYZE only. Do not use --rewrite,
 --update-all or -U unless the developer explicitly asks for a structural
 rewrite.
+
+ENGINEERING CONTEXT FORMAT
+Use this internal format for significant investigations:
+
+ENGINEERING CONTEXT
+
+1. OBJECTIVE
+   Exact task and expected result.
+
+2. VERIFIED SOURCE FINDINGS
+   Confirmed facts from relevant implementation.
+
+3. RELEVANT SOURCE LOCATIONS
+   Files, classes, functions and important lines.
+
+4. DEPENDENCIES
+   Verified relationships and unresolved dependencies.
+
+5. ARCHITECTURAL CONSTRAINTS
+   Existing decisions and implementation restrictions.
+
+6. TEST EVIDENCE
+   Relevant tests and actual results, if executed.
+
+7. UNCERTAINTIES
+   Missing or unverified information.
+
+8. REQUIRED CLOUD REASONING
+   Precise problem requiring Mistral intelligence.
+
+RULES FOR REDUCING NOISE
+1. Search narrowly before expanding repository investigation.
+2. Retrieve relevant source sections rather than complete files wherever sufficient.
+3. Preserve surrounding code when essential to understand behavior.
+4. Avoid repeatedly retrieving the same information.
+5. Summarize large deterministic tool outputs where reliable.
+6. Remove duplicate and irrelevant findings.
+7. Return concise evidence from subagents instead of their entire investigation transcripts.
+8. Preserve uncertainties instead of guessing.
+9. Avoid unnecessary cloud calls for operations Vibe can perform locally.
+10. Stop investigating when sufficient information is available to implement or decide correctly.
+
+Do not sacrifice correctness to reduce tokens.
+The objective is zero unnecessary noise, not zero cloud context.
+
+LOCAL EXECUTION AND CLOUD REASONING
+Use local execution for deterministic operations wherever reliable, minimize unnecessary cloud
+reasoning calls and avoid transferring unfiltered tool outputs.
+Do not claim or imply that Vibe has a separate, fully local reasoning engine.
+
+SKILLS, SUBAGENTS AND THE MAIN AGENT
+A skill defines the workflow. A subagent performs delegated specialist work. The main agent
+coordinates the work. Do not repeat the same investigation in the skill, the main agent and a
+subagent.
+If the Test Reviewer subagent cannot obtain approval to run a test, run the validation it
+returns yourself, through the normal approval prompt.
+
+VALIDATION AFTER SIGNIFICANT WORK
+After significant implementation work:
+1. Inspect the resulting Git diff.
+2. Check for unintended file changes.
+3. Identify applicable existing tests.
+4. Run authorized validation.
+5. Report failures and unexecuted checks.
+6. Do not claim completion without describing the actual validation.

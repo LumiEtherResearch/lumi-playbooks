@@ -2,8 +2,8 @@
 """Merge the LumiEther-managed Vibe settings into an existing ~/.vibe/config.toml.
 
 Idempotent and non-destructive: it only adds two clearly marked blocks
-(one top-level key, one set of tables; no MCP servers - Codebase Memory was retired) and refuses to touch a file that already
-sets the same things itself. Run with the Vibe venv interpreter so it can read
+(top-level keys, one set of tables; no MCP servers - Codebase Memory was retired). A key the
+user already sets to the same value is left where it is; a different value is a conflict. Run with the Vibe venv interpreter so it can read
 Vibe's own default Bash allowlist (a custom `allowlist` REPLACES the default).
 
   merge-config.py CONFIG [--check]
@@ -20,6 +20,8 @@ from pathlib import Path
 TOP_BEGIN, TOP_END = "# >>> LUMIETHER MANAGED (top) >>>", "# <<< LUMIETHER MANAGED (top) <<<"
 TBL_BEGIN, TBL_END = "# >>> LUMIETHER MANAGED (tables) >>>", "# <<< LUMIETHER MANAGED (tables) <<<"
 AGENT = "lumiether"
+COMPACTION = "lumiether-compaction"  # ~/.vibe/prompts/lumiether-compaction.md must exist first
+TOP_KEYS = {"default_agent": AGENT, "compaction_prompt_id": COMPACTION}
 # NOTE: matching is by command prefix, so "ast-grep run" also matches
 # "ast-grep run ... --rewrite -U". The prompt forbids rewrites unless asked.
 EXTRA_ALLOW = ["ast-grep run", "ast-grep --version"]
@@ -45,15 +47,6 @@ def default_allowlist():
         return None
 
 
-def is_configured(cfg):
-    """True when the config already holds every LumiEther setting (e.g. Vibe rewrote the
-    file and dropped the marker comments)."""
-    if cfg.get("default_agent") != AGENT:
-        return False
-    allow = cfg.get("tools", {}).get("bash", {}).get("allowlist", [])
-    return all(e in allow for e in EXTRA_ALLOW)
-
-
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     check = "--check" in sys.argv
@@ -65,47 +58,57 @@ def main():
 
     try:
         before = tomllib.loads(rest)
+        effective = tomllib.loads(current)
     except tomllib.TOMLDecodeError as exc:
-        print(f"ERROR: {path} is not valid TOML outside the managed blocks: {exc}", file=sys.stderr)
+        print(f"ERROR: {path} is not valid TOML: {exc}", file=sys.stderr)
         return 1
 
-    no_markers = TOP_BEGIN not in current and TBL_BEGIN not in current
+    has_markers = TOP_BEGIN in current or TBL_BEGIN in current
     user_owns_bash = "bash" in before.get("tools", {})  # [tools.bash] sits outside the managed blocks
-    if (no_markers or user_owns_bash) and is_configured(tomllib.loads(current)):
-        print(f"unchanged {path} (already configured; settings are outside the managed blocks)")
-        return 0
+    allow = effective.get("tools", {}).get("bash", {}).get("allowlist", [])
+    allow_ok = all(e in allow for e in EXTRA_ALLOW)
 
-    conflicts = []
-    if "default_agent" in before and before["default_agent"] != AGENT:
-        conflicts.append(f"default_agent is already set to {before['default_agent']!r}")
-    if "bash" in before.get("tools", {}):
+    conflicts = [f"{k} is already set to {before[k]!r}" for k, v in TOP_KEYS.items()
+                 if k in before and before[k] != v]
+    if user_owns_bash and not allow_ok:
         conflicts.append("[tools.bash] is already configured")
     if conflicts:
         print(f"CONFLICT in {path}: " + "; ".join(conflicts) + ". Not changing anything.", file=sys.stderr)
         return 3
 
-    top = f'{TOP_BEGIN}\ndefault_agent = "{AGENT}"\n{TOP_END}\n'
-    tbl = [TBL_BEGIN]
-    defaults = default_allowlist()
-    if defaults is not None:
-        allow = defaults + [p for p in EXTRA_ALLOW if p not in defaults]
-        tbl += ["[tools.bash]", 'permission = "ask"', "allowlist = ["]
-        tbl += [f"    {q(a)}," for a in allow] + ["]"]
-    tbl.append(TBL_END)
+    top_keys = {k: v for k, v in TOP_KEYS.items() if k not in before}
+    need_tables = not user_owns_bash
+    if not top_keys and not need_tables and not has_markers:
+        print(f"unchanged {path} (already configured; settings are outside the managed blocks)")
+        return 0
 
+    sections = []
+    if top_keys:
+        sections.append("\n".join([TOP_BEGIN] + [f"{k} = {q(v)}" for k, v in top_keys.items()] + [TOP_END]))
     body = rest.strip("\n")
-    new = top + ("\n" + body + "\n" if body else "") + "\n" + "\n".join(tbl) + "\n"
+    if body:
+        sections.append(body)
+    if need_tables:
+        tbl = [TBL_BEGIN]
+        defaults = default_allowlist()
+        if defaults is not None:
+            allow_new = defaults + [p for p in EXTRA_ALLOW if p not in defaults]
+            tbl += ["[tools.bash]", 'permission = "ask"', "allowlist = ["]
+            tbl += [f"    {q(a)}," for a in allow_new] + ["]"]
+        tbl.append(TBL_END)
+        sections.append("\n".join(tbl))
+    new = "\n\n".join(sections) + "\n"
 
     after = tomllib.loads(new)  # raises -> exit non-zero, nothing written
     expected = dict(after)
-    expected.pop("default_agent", None)
-    if "tools" in expected:
+    for k in top_keys:
+        expected.pop(k, None)
+    if need_tables and "tools" in expected:
         t = dict(expected["tools"]); t.pop("bash", None)
         expected["tools"] = t
         if not t and "tools" not in before:
             expected.pop("tools")
-    prior = dict(before); prior.pop("default_agent", None)
-    if expected != {k: v for k, v in prior.items() if k != "mcp_servers"}:
+    if expected != before:
         print("ERROR: merge would alter existing settings; refusing.", file=sys.stderr)
         return 1
 

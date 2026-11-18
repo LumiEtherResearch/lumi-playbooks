@@ -49,6 +49,32 @@
         group: "{{ lu }}"
         mode: "0600"
 
+    # The merge below sets compaction_prompt_id; Vibe fails to start if that prompt file is missing.
+    - name: "{{ lu }}: compaction prompt"
+      ansible.builtin.copy:
+        src: "{{ lumiether_src }}/prompts/lumiether-compaction.md"
+        dest: "{{ lu_home }}/.vibe/prompts/lumiether-compaction.md"
+        owner: "{{ lu }}"
+        group: "{{ lu }}"
+        mode: "0600"
+
+    - name: "{{ lu }}: ~/.vibe/skills"
+      ansible.builtin.file:
+        path: "{{ lu_home }}/.vibe/skills"
+        state: directory
+        owner: "{{ lu }}"
+        group: "{{ lu }}"
+        mode: "0755"
+
+    - name: "{{ lu }}: five engineering skills"
+      ansible.builtin.copy:
+        src: "{{ lumiether_src }}/skills/"
+        dest: "{{ lu_home }}/.vibe/skills/"
+        owner: "{{ lu }}"
+        group: "{{ lu }}"
+        mode: "0644"
+        directory_mode: "0755"
+
     - name: "{{ lu }}: is the config merger installed?"
       ansible.builtin.stat:
         path: "{{ lumiether_lib }}/merge-config.py"
