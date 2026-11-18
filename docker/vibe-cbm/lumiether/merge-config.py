@@ -2,7 +2,7 @@
 """Merge the LumiEther-managed Vibe settings into an existing ~/.vibe/config.toml.
 
 Idempotent and non-destructive: it only adds two clearly marked blocks
-(one top-level key, one set of tables) and refuses to touch a file that already
+(one top-level key, one set of tables; no MCP servers - Codebase Memory was retired) and refuses to touch a file that already
 sets the same things itself. Run with the Vibe venv interpreter so it can read
 Vibe's own default Bash allowlist (a custom `allowlist` REPLACES the default).
 
@@ -20,8 +20,6 @@ from pathlib import Path
 TOP_BEGIN, TOP_END = "# >>> LUMIETHER MANAGED (top) >>>", "# <<< LUMIETHER MANAGED (top) <<<"
 TBL_BEGIN, TBL_END = "# >>> LUMIETHER MANAGED (tables) >>>", "# <<< LUMIETHER MANAGED (tables) <<<"
 AGENT = "lumiether"
-MCP_NAME = "codebase-memory-mcp"
-MCP_COMMAND = "/usr/local/bin/codebase-memory-mcp"
 # NOTE: matching is by command prefix, so "ast-grep run" also matches
 # "ast-grep run ... --rewrite -U". The prompt forbids rewrites unless asked.
 EXTRA_ALLOW = ["ast-grep run", "ast-grep --version"]
@@ -52,9 +50,6 @@ def is_configured(cfg):
     file and dropped the marker comments)."""
     if cfg.get("default_agent") != AGENT:
         return False
-    if not any(s.get("name") == MCP_NAME and s.get("command") == MCP_COMMAND
-               for s in cfg.get("mcp_servers", [])):
-        return False
     allow = cfg.get("tools", {}).get("bash", {}).get("allowlist", [])
     return all(e in allow for e in EXTRA_ALLOW)
 
@@ -83,8 +78,6 @@ def main():
     conflicts = []
     if "default_agent" in before and before["default_agent"] != AGENT:
         conflicts.append(f"default_agent is already set to {before['default_agent']!r}")
-    if any(s.get("name") == MCP_NAME for s in before.get("mcp_servers", [])):
-        conflicts.append(f"an MCP server named {MCP_NAME!r} already exists")
     if "bash" in before.get("tools", {}):
         conflicts.append("[tools.bash] is already configured")
     if conflicts:
@@ -92,8 +85,7 @@ def main():
         return 3
 
     top = f'{TOP_BEGIN}\ndefault_agent = "{AGENT}"\n{TOP_END}\n'
-    tbl = [TBL_BEGIN, "[[mcp_servers]]", f"name = {q(MCP_NAME)}", 'transport = "stdio"',
-           f"command = {q(MCP_COMMAND)}", "args = []", ""]
+    tbl = [TBL_BEGIN]
     defaults = default_allowlist()
     if defaults is not None:
         allow = defaults + [p for p in EXTRA_ALLOW if p not in defaults]
@@ -107,7 +99,6 @@ def main():
     after = tomllib.loads(new)  # raises -> exit non-zero, nothing written
     expected = dict(after)
     expected.pop("default_agent", None)
-    expected.pop("mcp_servers", None)
     if "tools" in expected:
         t = dict(expected["tools"]); t.pop("bash", None)
         expected["tools"] = t
