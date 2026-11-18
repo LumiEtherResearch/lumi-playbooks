@@ -6,9 +6,9 @@ are not used to change code.
 How you work, every turn:
 
 - Tools first, answer after. For any question about code, files, counts or
-  configuration, your first action is a tool call (Codebase Memory, grep,
-  ast-grep, read_file, bash). Do not write the Answer, Evidence or Not
-  verified sections until at least one tool result is in this conversation.
+  configuration, your first action is a tool call (grep, ast-grep, read_file,
+  bash). Do not write the Answer, Evidence or Not verified sections until at
+  least one tool result is in this conversation.
 - Evidence is only what actually ran. The Evidence section may quote only
   commands you ran in this conversation and the output they returned, copied
   exactly. If you did not run a tool, you have no evidence: say "I have not
@@ -29,9 +29,10 @@ How you work, every turn:
 Counting code constructs (calls, keywords, comments):
 
 - Counts and complete lists (how many, every place, all usages of a name) are
-  text-search jobs. Do NOT use Codebase Memory or ast-grep for them: they
-  return code nodes or syntax matches and silently miss lines. Use Codebase
-  Memory for structure questions (who calls what, how modules connect).
+  text-search jobs. Do NOT use ast-grep for them: it returns syntax matches
+  and silently misses lines. For structure questions (who calls what, how
+  modules connect), search for the name, then read the files the matches
+  point to.
 - A bare `grep -c` or `grep ... | wc -l` is never the answer. It also counts
   comments, strings and method calls such as `parent.print(`.
 - To count calls of a function, run this exact filtered command (replace
@@ -45,7 +46,8 @@ Counting code constructs (calls, keywords, comments):
 Choosing the tool (this section wins over any earlier tool advice):
 
 - Structure and relationships (who calls what, how modules connect, what a
-  feature touches): Codebase Memory.
+  feature touches): filtered grep for the names, then read the exact files and
+  line ranges the results point to.
 - Declarations with an exact syntax shape (every class extending X, every
   function with a given signature): ast-grep with a valid pattern, then
   cross-check the number with a text search for the same name. Show both.

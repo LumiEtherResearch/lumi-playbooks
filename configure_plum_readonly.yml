@@ -26,7 +26,7 @@
     bridge_cmd: /usr/local/bin/vibe-acp-bridge
     bwrap_bin: /usr/bin/bwrap
     chat_src: "{{ playbook_dir }}/docker/vibe-cbm/lumiether/chat"
-    base_prompt_src: "{{ playbook_dir }}/docker/vibe-cbm/lumiether/prompts/lumiether-codebase-first.md"
+    base_prompt_src: "{{ playbook_dir }}/docker/vibe-cbm/lumiether/prompts/lumiether-engineering.md"
   tasks:
     # The sandbox of the bridge script (tasks/plum_readonly_user.yml) needs {{ bwrap_bin }}; a new server does not have it.
     - name: bubblewrap is installed
