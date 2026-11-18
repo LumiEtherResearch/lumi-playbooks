@@ -62,7 +62,7 @@ df() { sed -n "s/^ARG $1=//p" "$R/docker/vibe-cbm/Dockerfile" | head -n 1; }
 
 echo "== 0. the pin"
 chk "the playbook pins $PC; the Dockerfile CBM_VERSION is $(df CBM_VERSION)"                       '[[ -n $PC && $PC == "$(df CBM_VERSION)" ]]'
-chk "the installer checksum equals the Dockerfile's and configure_vibe_lumiether.yml's"            'grep -q "$(df CBM_INSTALLER_SHA256)" "$R/install_codebasemem.yml" && grep -q "$(df CBM_INSTALLER_SHA256)" "$R/configure_vibe_lumiether.yml"'
+chk "the installer checksum equals the Dockerfile's"            'grep -q "$(df CBM_INSTALLER_SHA256)" "$R/install_codebasemem.yml"'
 chk "no fixed /tmp/cbm-install.sh path and no installer from the main branch any more"             '! grep -q "/tmp/cbm-install.sh" "$R/install_codebasemem.yml" && ! grep -q "codebase-memory-mcp/main/install.sh" "$R/install_codebasemem.yml"'
 
 echo "== U1. a user without the binary"

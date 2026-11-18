@@ -41,10 +41,10 @@
       loop:
         - { src: agents/lumiether.toml, dest: agents/lumiether.toml }
 
-    - name: "{{ lu }}: lumiether prompt (codebase-first plus the preview rule)"
+    - name: "{{ lu }}: lumiether prompt (engineering prompt plus the preview rule)"
       ansible.builtin.copy:
-        content: "{{ lookup('file', lumiether_src ~ '/prompts/lumiether-codebase-first.md') }}\n\n{{ lookup('file', lumiether_src ~ '/prompts/lumiether-preview.md') }}\n"
-        dest: "{{ lu_home }}/.vibe/prompts/lumiether-codebase-first.md"
+        content: "{{ lookup('file', lumiether_src ~ '/prompts/lumiether-engineering.md') }}\n\n{{ lookup('file', lumiether_src ~ '/prompts/lumiether-preview.md') }}\n"
+        dest: "{{ lu_home }}/.vibe/prompts/lumiether-engineering.md"
         owner: "{{ lu }}"
         group: "{{ lu }}"
         mode: "0600"
@@ -66,19 +66,6 @@
       failed_when: lu_merge.rc not in [0, 3]
       check_mode: false
       when: lu_helper.stat.exists
-
-    - name: "{{ lu }}: Codebase Memory settings"
-      ansible.builtin.command: "{{ cbm_bin }} config set {{ item }}"
-      become_user: "{{ lu }}"
-      environment:
-        HOME: "{{ lu_home }}"
-      loop:
-        - auto_index true
-        - auto_index_limit 50000
-        - auto_watch true
-        - watcher_enabled true
-      changed_when: false
-      when: configure_cbm | bool and lu_merge.rc | default(1) == 0 and not ansible_check_mode
 
     - name: "{{ lu }}: record result"
       ansible.builtin.set_fact:
