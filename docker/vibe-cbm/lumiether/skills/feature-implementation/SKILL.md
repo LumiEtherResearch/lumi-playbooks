@@ -14,7 +14,7 @@ user-invocable: true
 6. Prepare the smallest suitable implementation plan.
 7. Implement only the required changes.
 8. Follow existing coding conventions.
-9. Update applicable tests.
+9. Update applicable tests.
 10. Execute authorized local validation.
 11. Inspect the final Git diff.
 12. Report changes, validation and outstanding issues.

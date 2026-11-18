@@ -25,7 +25,7 @@ Preserve
 
 Remove
  1. Repeated explanations.
- 2. Duplicate investigation results.
+ 2. Duplicate investigation results.
 
  3. Irrelevant source excerpts.
 
