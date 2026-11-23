@@ -5,23 +5,89 @@ Trusted, narrowly scoped writer for LUMIANS Engineering Memory.
 Runs as root through sudo. It can only write
   <ROOT>/<project>/features/<feature>/<layer>.md
 and keeps the previous version and an audit line for every write.
+
+It refuses a write unless
+  - PROJECT is a project listed in /srv/lumiether/workspace-map.json,
+  - the content has one line  Source-Commit: <40 hex characters>  and that commit is on
+    the project's main branch (origin/main, else main) in a registered workspace,
+  - the content holds no credential (key=value secrets, private keys, known token shapes).
+It then stamps a header line with the commit, the date and the user, taken from the
+writer's own checks and clock, not from the content.
 """
 import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 
 ROOT = "/srv/lumiether/engineering-memory"
 AUDIT = ROOT + "/.audit.log"
+WORKSPACE_MAP = "/srv/lumiether/workspace-map.json"
 MAX_BYTES = 256 * 1024
 NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+COMMIT_LINE = re.compile(r"^Source-Commit:[ \t]*([0-9a-f]{40})[ \t]*$", re.M)
+STAMP_LINE = re.compile(r"^<!-- lumi-memory-write:.*-->[ \t]*\n?", re.M)
+SECRET_ASSIGN = re.compile(
+    r"(?i)(secret|passw(?:or)?d|token|api[_-]?key|access[_-]?key|private[_-]?key|credential)"
+    r"[\w.\-]*[ \t]*=[ \t]*[\"']?([^\s\"'`]+)")
+SECRET_SHAPES = re.compile(
+    r"AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{30,}|github_pat_\w{20,}|xox[baprs]-[\w-]{10,}"
+    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----")
 
 
 def die(msg, code=2):
     print(f"lumi-memory-write: {msg}", file=sys.stderr)
     sys.exit(code)
+
+
+def find_secret(text):
+    for n, line in enumerate(text.splitlines(), 1):
+        if SECRET_SHAPES.search(line):
+            return n
+        for m in SECRET_ASSIGN.finditer(line):
+            value = m.group(2)
+            if value[:1] in "<${" or value.lower().startswith("redacted"):
+                continue
+            return n
+    return 0
+
+
+def workspaces_for(project):
+    try:
+        with open(WORKSPACE_MAP, encoding="utf-8") as fh:
+            entries = json.load(fh)
+    except (OSError, ValueError):
+        die(f"cannot read {WORKSPACE_MAP}")
+    mine = [e for e in entries if isinstance(e, dict) and e.get("project") == project]
+    return mine
+
+
+def git(ws, *args):
+    return subprocess.run(
+        ["git", "-c", f"safe.directory={ws}", "-C", ws, *args],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30,
+        env={"PATH": "/usr/bin:/bin", "GIT_TERMINAL_PROMPT": "0", "HOME": "/root"})
+
+
+def commit_on_main(project, sha):
+    """Return the main ref name if sha is on main in a registered workspace, else None."""
+    for entry in workspaces_for(project):
+        ws = entry.get("workspace", "")
+        if not ws or not os.path.isdir(ws):
+            continue
+        try:
+            if git(ws, "cat-file", "-e", f"{sha}^{{commit}}").returncode != 0:
+                continue
+            for ref in ("origin/main", "main"):
+                if git(ws, "rev-parse", "--verify", "--quiet", ref).returncode != 0:
+                    continue
+                if git(ws, "merge-base", "--is-ancestor", sha, ref).returncode == 0:
+                    return ref
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+    return None
 
 
 def main():
@@ -35,15 +101,41 @@ def main():
     if not who:
         die("must be run through sudo by a developer")
 
+    known = workspaces_for(project)
+    if not known:
+        die(f"unknown project {project!r}: use the project name from {WORKSPACE_MAP}")
+
     data = sys.stdin.buffer.read(MAX_BYTES + 1)
     if not data.strip():
         die("empty content, nothing written")
     if len(data) > MAX_BYTES:
         die("content too large (max 256 KB)")
     try:
-        data.decode("utf-8")
+        text = data.decode("utf-8")
     except UnicodeDecodeError:
         die("content must be UTF-8 text")
+
+    text = STAMP_LINE.sub("", text)
+    bad = find_secret(text)
+    if bad:
+        die(f"line {bad} looks like a credential. Replace the value with <redacted> and write again. Nothing written.")
+
+    found = COMMIT_LINE.findall(text)
+    if len(found) != 1:
+        die("the content needs exactly one line 'Source-Commit: <40-character commit hash>' "
+            "(run `git rev-parse HEAD` in the repo you studied). Nothing written.")
+    sha = found[0]
+    ref = commit_on_main(project, sha)
+    if not ref:
+        die(f"commit {sha[:12]} is not on the main branch of project {project!r} in any registered "
+            "workspace. Only merged work is recorded; merge it (or fetch) and write again. Nothing written.")
+
+    stamp = time.strftime("%Y%m%dT%H%M%S")
+    header = (f"<!-- lumi-memory-write: project={project} feature={feature} layer={layer} "
+              f"source-commit={sha} on={ref} written={stamp} by={who} -->\n")
+    data = (header + text.lstrip("\n")).encode("utf-8")
+    if len(data) > MAX_BYTES:
+        die("content too large (max 256 KB)")
 
     os.umask(0o022)
     folder = f"{ROOT}/{project}/features/{feature}"
@@ -52,7 +144,6 @@ def main():
         die("path escapes the Engineering Memory folder")
 
     target = f"{folder}/{layer}.md"
-    stamp = time.strftime("%Y%m%dT%H%M%S")
     if os.path.exists(target):
         hist = f"{folder}/.history"
         os.makedirs(hist, mode=0o755, exist_ok=True)
@@ -70,11 +161,12 @@ def main():
     line = json.dumps({
         "time": stamp, "user": who, "project": project, "feature": feature,
         "layer": layer, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+        "source_commit": sha,
     })
     fd = os.open(AUDIT, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
     with os.fdopen(fd, "a") as fh:
         fh.write(line + "\n")
-    print(f"written: {target} ({len(data)} bytes)")
+    print(f"written: {target} ({len(data)} bytes, commit {sha[:12]} on {ref})")
 
 
 main()
